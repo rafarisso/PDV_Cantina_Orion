@@ -1,21 +1,17 @@
 [build]
-  command = "npm run build"
-  publish = "dist"
-  functions = "netlify/functions"
+command = "npm run build"
+publish = "dist"
 
 [functions]
-  node_bundler = "esbuild"
+directory = "netlify/functions"
+node_bundler = "esbuild"
 
 [[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/:splat"
-  status = 200
+from = "/api/*"
+to = "/.netlify/functions/:splat"
+status = 200
 
 [[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-
-[[functions]]
-  name = "weekly-summary"
-  schedule = "0 21 * * 5"
+from = "/*"
+to = "/index.html"
+status = 200
