@@ -8,19 +8,31 @@ const BillingPage = () => {
   const [amount, setAmount] = useState<number>(20)
   const [note, setNote] = useState('Credito para consumo')
   const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
+    setError(null)
     const student = students.find((s) => s.id === studentId)
     if (!student) return
-    const charge = createPixCharge({
-      guardianId: student.guardianId,
-      studentId,
-      amount,
-      description: note,
-    })
-    setMessage(
-      `Cobranca criada (${charge.txid}). Gere payload copia-e-cola via function /api/pix/create e envie ao responsavel.`,
-    )
+    setLoading(true)
+    try {
+      const charge = await createPixCharge({
+        guardianId: student.guardianId,
+        studentId,
+        amount,
+        description: note,
+      })
+      setMessage(
+        charge.brCode
+          ? `Cobranca criada (${charge.txid}). Copie e envie o codigo Pix para o responsavel.`
+          : `Cobranca criada (${charge.txid}). Gere payload copia-e-cola via function /api/pix/create e envie ao responsavel.`,
+      )
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -60,8 +72,9 @@ const BillingPage = () => {
             <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           {message && <div className="pill positive">{message}</div>}
-          <button className="btn btn-primary" type="button" onClick={handleCreate}>
-            Criar cobranca Pix
+          {error && <div className="pill danger">{error}</div>}
+          <button className="btn btn-primary" type="button" onClick={handleCreate} disabled={loading}>
+            {loading ? 'Gerando...' : 'Criar cobranca Pix'}
           </button>
         </div>
         <p className="muted" style={{ marginTop: 12 }}>

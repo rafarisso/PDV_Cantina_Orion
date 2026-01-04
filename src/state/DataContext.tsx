@@ -9,6 +9,7 @@ import {
   type Order,
   type PixCharge,
   type Product,
+  type PricingModel,
   type Student,
   type UserRole,
   type Wallet,
@@ -44,7 +45,8 @@ interface DataContextValue {
     actorRole: UserRole
   }) => Wallet
   acknowledgeAlert: (alertId: string) => void
-  createPixCharge: (params: { guardianId: string; studentId?: string; amount: number; description?: string }) => PixCharge
+  createPixCharge: (params: { guardianId: string; studentId?: string; amount: number; description?: string }) => Promise<PixCharge>
+  updateWalletModel: (params: { studentId: string; pricingModel: PricingModel; creditLimit: number; blockedReason?: string }) => void
 }
 
 const ALERT_LEVELS = [0.3, 0.15, 0]
@@ -344,7 +346,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     )
   }
 
-  const createPixCharge = ({
+  const createPixCharge = async ({
     guardianId,
     studentId,
     amount,
@@ -355,6 +357,35 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     amount: number
     description?: string
   }) => {
+    if (!guardianId) throw new Error('Responsavel obrigatorio')
+    if (amount <= 0) throw new Error('Valor deve ser maior que zero')
+
+    if (supabase && !env.isDemo) {
+      const { data, error } = await supabase.rpc('create_topup_charge', {
+        p_guardian_id: guardianId,
+        p_student_id: studentId ?? null,
+        p_amount: amount,
+        p_description: description ?? 'Credito para consumo',
+      })
+      if (error) throw new Error(error.message)
+      const row: any = Array.isArray(data) ? data[0] : data
+      const charge: PixCharge = {
+        id: row?.id ?? uid(),
+        guardianId: row?.guardian_id ?? guardianId,
+        studentId: row?.student_id ?? studentId,
+        txid: row?.txid ?? row?.id ?? uid(),
+        status: row?.status ?? 'created',
+        amount: Number(row?.amount ?? amount),
+        brCode: row?.br_code ?? '',
+        createdAt: row?.created_at ?? new Date().toISOString(),
+        description: row?.description ?? description,
+        ledgerId: row?.ledger_id ?? undefined,
+        expiresAt: row?.expires_at ?? undefined,
+      }
+      setPixCharges((prev) => [charge, ...prev.filter((c) => c.txid !== charge.txid)])
+      return charge
+    }
+
     const charge: PixCharge = {
       id: uid(),
       guardianId,
@@ -368,6 +399,32 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     }
     setPixCharges((prev) => [charge, ...prev])
     return charge
+  }
+
+  const updateWalletModel = ({
+    studentId,
+    pricingModel,
+    creditLimit,
+    blockedReason,
+  }: {
+    studentId: string
+    pricingModel: PricingModel
+    creditLimit: number
+    blockedReason?: string
+  }) => {
+    setWallets((prev) =>
+      prev.map((wallet) => {
+        if (wallet.studentId !== studentId) return wallet
+        return {
+          ...wallet,
+          model: pricingModel,
+          creditLimit,
+          balance: pricingModel === 'prepaid' ? Math.max(0, wallet.balance) : wallet.balance,
+          blocked: pricingModel === 'prepaid' ? false : wallet.blocked,
+          blockedReason: pricingModel === 'prepaid' ? undefined : blockedReason ?? wallet.blockedReason,
+        }
+      }),
+    )
   }
 
   const value = useMemo<DataContextValue>(
@@ -386,6 +443,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       adjustWallet,
       acknowledgeAlert,
       createPixCharge,
+      updateWalletModel,
     }),
     [alerts, guardians, ledger, orders, pixCharges, products, students, wallets],
   )

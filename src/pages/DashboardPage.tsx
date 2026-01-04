@@ -1,9 +1,116 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useData } from '@/state/DataContext'
+import { supabase } from '@/lib/supabaseClient'
+import { env } from '@/lib/env'
 import { formatCurrency, formatDateTime, maskCpf } from '@/lib/format'
+
+type SalesWindow = { total?: number; window_start?: string; window_end?: string }
+type BestClient = { full_name?: string; student_id?: string; total_spent?: number; grade?: string; period?: string }
+type WeeklyRow = {
+  student_id?: string
+  guardian_id?: string
+  full_name?: string
+  period?: string
+  total_spent?: number
+  first_purchase?: string
+  last_purchase?: string
+}
 
 const DashboardPage = () => {
   const { students, wallets, alerts, orders, guardians } = useData()
+  const [loadingViews, setLoadingViews] = useState(!env.isDemo && Boolean(supabase))
+  const [viewError, setViewError] = useState<string | null>(null)
+  const [salesToday, setSalesToday] = useState<number | null>(null)
+  const [bestWindow, setBestWindow] = useState<SalesWindow | null>(null)
+  const [bestClient, setBestClient] = useState<BestClient | null>(null)
+  const [weeklyConsumption, setWeeklyConsumption] = useState<WeeklyRow[]>([])
+
+  useEffect(() => {
+    const client = supabase
+    if (!client || env.isDemo) {
+      setLoadingViews(false)
+      return
+    }
+    setLoadingViews(true)
+    setViewError(null)
+    const fetchViews = async () => {
+      const [salesRes, windowRes, bestRes, weeklyRes] = await Promise.all([
+        client.from('admin_sales_today').select('*').maybeSingle(),
+        client
+          .from('admin_sales_today_20min')
+          .select('*')
+          .order('total', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        client
+          .from('admin_best_client_today')
+          .select('*')
+          .order('total_spent', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        client.from('weekly_consumption').select('*'),
+      ])
+      if (salesRes.error || windowRes.error || bestRes.error || weeklyRes.error) {
+        setViewError(
+          salesRes.error?.message ??
+            windowRes.error?.message ??
+            bestRes.error?.message ??
+            weeklyRes.error?.message ??
+            'Falha ao carregar visoes',
+        )
+      }
+      setSalesToday(
+        salesRes.data ? Number((salesRes.data as any).total ?? (salesRes.data as any).sum_total ?? 0) : null,
+      )
+      setBestWindow(windowRes.data ? (windowRes.data as SalesWindow) : null)
+      setBestClient(bestRes.data ? (bestRes.data as BestClient) : null)
+      setWeeklyConsumption(Array.isArray(weeklyRes.data) ? (weeklyRes.data as WeeklyRow[]) : [])
+      setLoadingViews(false)
+    }
+    void fetchViews()
+  }, [])
+
+  const fallbackSalesToday = useMemo(
+    () => orders.reduce((sum, order) => sum + order.total, 0),
+    [orders],
+  )
+
+  const fallbackBestClient = useMemo(() => {
+    const totals = new Map<string, number>()
+    orders.forEach((order) => {
+      totals.set(order.studentId, (totals.get(order.studentId) ?? 0) + order.total)
+    })
+    const [studentId, total] = [...totals.entries()].sort((a, b) => b[1] - a[1])[0] ?? [undefined, 0]
+    const student = students.find((s) => s.id === studentId)
+    return studentId
+      ? ({ student_id: studentId, full_name: student?.fullName, total_spent: total, grade: student?.grade, period: student?.period } as BestClient)
+      : null
+  }, [orders, students])
+
+  const fallbackWeekly = useMemo<WeeklyRow[]>(() => {
+    const map = new Map<string, { total: number; first: string; last: string; student?: any }>()
+    orders.forEach((order) => {
+      const student = students.find((s) => s.id === order.studentId)
+      const current = map.get(order.studentId) ?? {
+        total: 0,
+        first: order.createdAt,
+        last: order.createdAt,
+        student,
+      }
+      current.total += order.total
+      current.first = current.first < order.createdAt ? current.first : order.createdAt
+      current.last = current.last > order.createdAt ? current.last : order.createdAt
+      map.set(order.studentId, current)
+    })
+    return [...map.entries()].map(([studentId, info]) => ({
+      student_id: studentId,
+      full_name: info.student?.fullName,
+      period: info.student?.period,
+      total_spent: info.total,
+      first_purchase: info.first,
+      last_purchase: info.last,
+    }))
+  }, [orders, students])
 
   const stats = useMemo(() => {
     const prepaidBalance = wallets
@@ -28,25 +135,78 @@ const DashboardPage = () => {
   const findStudent = (studentId: string) => students.find((s) => s.id === studentId)
   const findGuardian = (guardianId: string) => guardians.find((g) => g.id === guardianId)
 
+  const effectiveSalesToday = salesToday ?? fallbackSalesToday
+  const effectiveBestClient = bestClient ?? fallbackBestClient ?? undefined
+  const effectiveWeekly = weeklyConsumption.length > 0 ? weeklyConsumption : fallbackWeekly
+
   return (
     <div className="grid" style={{ gap: 16 }}>
       <section className="grid stats">
         <div className="stat">
-          <small>Saldo total (pre-pago)</small>
-          <strong>{formatCurrency(stats.prepaidBalance)}</strong>
+          <small>Total vendido hoje</small>
+          <strong>{formatCurrency(effectiveSalesToday)}</strong>
+          {viewError && <div className="muted">Usando dados locais</div>}
         </div>
         <div className="stat">
-          <small>Debitos em fiado</small>
-          <strong>{formatCurrency(stats.debitTotal)}</strong>
+          <small>Melhor janela 20 min</small>
+          <strong>{bestWindow?.total ? formatCurrency(bestWindow.total) : 'Sem dados'}</strong>
+          {bestWindow?.window_start && bestWindow?.window_end && (
+            <div className="muted">
+              {formatDateTime(bestWindow.window_start)} - {formatDateTime(bestWindow.window_end)}
+            </div>
+          )}
         </div>
         <div className="stat">
-          <small>Alunos bloqueados</small>
-          <strong>{stats.blocked}</strong>
+          <small>Melhor cliente hoje</small>
+          <strong>{effectiveBestClient?.full_name ?? 'Sem vendas'}</strong>
+          {effectiveBestClient?.total_spent !== undefined && (
+            <div className="muted">{formatCurrency(effectiveBestClient.total_spent ?? 0)}</div>
+          )}
         </div>
         <div className="stat">
           <small>Alertas pendentes</small>
           <strong>{stats.alertsOpen}</strong>
         </div>
+      </section>
+
+      {loadingViews && <div className="muted">Carregando visoes do admin...</div>}
+      {viewError && <div className="pill danger">{viewError}</div>}
+
+      <section className="card">
+        <div className="section-title">
+          <h3 style={{ margin: 0 }}>Consumo semanal</h3>
+          <span className="muted">Fonte: weekly_consumption</span>
+        </div>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Aluno</th>
+              <th>Periodo</th>
+              <th>Total gasto</th>
+              <th>Primeira/ultima compra</th>
+            </tr>
+          </thead>
+          <tbody>
+            {effectiveWeekly.map((row) => (
+              <tr key={row.student_id ?? row.full_name}>
+                <td>{row.full_name ?? findStudent(row.student_id ?? '')?.fullName ?? 'Aluno'}</td>
+                <td>{row.period ?? findStudent(row.student_id ?? '')?.period ?? '-'}</td>
+                <td>{formatCurrency(Number(row.total_spent ?? 0))}</td>
+                <td>
+                  {row.first_purchase ? formatDateTime(row.first_purchase) : '-'}{' '}
+                  {row.last_purchase ? ` / ${formatDateTime(row.last_purchase)}` : ''}
+                </td>
+              </tr>
+            ))}
+            {effectiveWeekly.length === 0 && (
+              <tr>
+                <td colSpan={4} className="muted">
+                  Sem dados ainda.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </section>
 
       <section className="card">

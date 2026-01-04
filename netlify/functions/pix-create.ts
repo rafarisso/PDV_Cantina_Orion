@@ -48,16 +48,19 @@ const handler: Handler = async (event) => {
 
     if (supabaseUrl && supabaseServiceKey) {
       const supabase = createClient(supabaseUrl, supabaseServiceKey)
-      await supabase.from('pix_charges').insert({
-        guardian_id: guardianId,
-        student_id: studentId,
-        amount,
-        status: 'pending',
-        br_code: brCode,
-        txid,
-        description,
-        expires_at: expiresAt,
+      const { error: rpcError } = await supabase.rpc('create_topup_charge', {
+        p_guardian_id: guardianId,
+        p_student_id: studentId ?? null,
+        p_amount: amount,
+        p_status: 'pending',
+        p_br_code: brCode,
+        p_txid: txid,
+        p_description: description ?? 'Cantina Orion',
+        p_expires_at: expiresAt,
       })
+      if (rpcError) {
+        return { statusCode: 400, body: rpcError.message }
+      }
     }
 
     return {

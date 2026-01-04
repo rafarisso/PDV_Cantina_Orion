@@ -6,15 +6,19 @@ import POSPage from '@/pages/POSPage'
 import StudentsPage from '@/pages/StudentsPage'
 import BillingPage from '@/pages/BillingPage'
 import LoginPage from '@/pages/LoginPage'
+import AdminWalletsPage from '@/pages/AdminWalletsPage'
+import GuardianPortalPage from '@/pages/GuardianPortalPage'
 import { type UserRole } from '@/types/domain'
-import { LogOut, Menu, ShieldCheck, ShoppingBag } from 'lucide-react'
+import { LogOut, Menu, PiggyBank, ShieldCheck, ShoppingBag, Wallet } from 'lucide-react'
 import { useMemo } from 'react'
 
 const NAV_ITEMS: { path: string; label: string; roles: UserRole[]; icon: JSX.Element }[] = [
   { path: '/', label: 'Painel', roles: ['admin'], icon: <ShieldCheck size={16} /> },
   { path: '/pdv', label: 'PDV', roles: ['admin', 'operator'], icon: <ShoppingBag size={16} /> },
+  { path: '/wallets', label: 'Carteiras', roles: ['admin'], icon: <Wallet size={16} /> },
   { path: '/students', label: 'Alunos', roles: ['admin'], icon: <Menu size={16} /> },
-  { path: '/billing', label: 'Cobranças Pix', roles: ['admin'], icon: <Menu size={16} /> },
+  { path: '/billing', label: 'Cobrancas Pix', roles: ['admin'], icon: <Menu size={16} /> },
+  { path: '/portal', label: 'Responsavel', roles: ['guardian'], icon: <PiggyBank size={16} /> },
 ]
 
 const App = () => {
@@ -57,6 +61,7 @@ const App = () => {
             >
               <option value="admin">Admin</option>
               <option value="operator">Operador</option>
+              <option value="guardian">Responsavel</option>
             </select>
           )}
           <button className="btn btn-ghost" onClick={() => signOut()}>
@@ -109,6 +114,22 @@ const App = () => {
           element={
             <Protected roles={['admin']}>
               <BillingPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/wallets"
+          element={
+            <Protected roles={['admin']}>
+              <AdminWalletsPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/portal"
+          element={
+            <Protected roles={['guardian', 'admin']}>
+              <GuardianPortalPage />
             </Protected>
           }
         />

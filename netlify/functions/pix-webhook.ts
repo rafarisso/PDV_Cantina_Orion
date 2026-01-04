@@ -27,27 +27,18 @@ const handler: Handler = async (event) => {
       return { statusCode: 404, body: 'Cobranca nao localizada' }
     }
 
-    await supabase.from('pix_charges').update({ status, br_code: payload.qr_codes?.[0]?.emv }).eq('txid', txid)
-
-    if (status === 'paid') {
-      if (charge.student_id) {
-        const { data: wallet } = await supabase.from('wallets').select('*').eq('student_id', charge.student_id).maybeSingle()
-        if (wallet) {
-          const isPrepaid = wallet.model === 'prepaid'
-          const newBalance = isPrepaid ? Number(wallet.balance) + amount : Math.max(Number(wallet.balance) - amount, 0)
-          await supabase
-            .from('wallets')
-            .update({ balance: newBalance, blocked: false, blocked_reason: null, allow_negative_once_used: isPrepaid ? wallet.allow_negative_once_used : wallet.allow_negative_once_used })
-            .eq('id', wallet.id)
-          await supabase.from('ledger').insert({
-            wallet_id: wallet.id,
-            kind: 'payment',
-            amount: amount,
-            balance_after: newBalance,
-            description: 'Pagamento via Pix (PagSeguro)',
-          })
-        }
-      }
+    const brCode = payload.qr_codes?.[0]?.emv ?? charge.br_code ?? ''
+    const { error: rpcError } = await supabase.rpc('create_topup_charge', {
+      p_guardian_id: charge.guardian_id,
+      p_student_id: charge.student_id,
+      p_amount: amount,
+      p_status: status,
+      p_br_code: brCode,
+      p_txid: txid,
+      p_description: charge.description ?? 'Pagamento Pix',
+    })
+    if (rpcError) {
+      return { statusCode: 400, body: rpcError.message }
     }
 
     return { statusCode: 200, body: 'ok' }
