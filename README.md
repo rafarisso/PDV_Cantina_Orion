@@ -5,7 +5,7 @@ Sistema PWA para PDV de cantina escolar com controle financeiro, regras de saldo
 ## Tecnologias
 - React + Vite + TypeScript (PWA, roteamento SPA)
 - Supabase (Postgres + Auth + RLS + função `process_purchase`)
-- Netlify Functions (`pix-create`, `pix-webhook`, `process-purchase`, `weekly-summary`)
+- Netlify Functions (`pix-create`, `pix-webhook`, `process-purchase`, `notify-purchase`, `weekly-summary`, `dispatch-outbox`)
 - PagSeguro Pix copia-e-cola (payload gerado via function)
 
 ## Como rodar
@@ -34,17 +34,20 @@ Função `process_purchase` aplica regra:
 `user_roles` controla papéis (admin, operator, guardian). RLS habilitado em todas as tabelas.
 
 ## Netlify Functions
-- `POST /api/pix/create`: cria cobrança via PagSeguro e registra em `pix_charges`.
-- `POST /api/pix/webhook`: confirma pagamento, credita carteira ou reduz débito e desbloqueia.
+- `POST /api/pix/create`: cria cobranca via PagSeguro e registra em `pix_charges`.
+- `POST /api/pix/webhook`: confirma pagamento, credita carteira ou reduz debito e desbloqueia.
 - `POST /api/process-purchase`: chama `rpc.process_purchase` (usa regra de bloqueio).
-- `weekly-summary` (cron sexta 18h BRT): lê `weekly_consumption`, gera outbox e envia resumos.
+- `POST /api/notify-purchase`: enfileira notificacao de compra em `notification_outbox` com detalhes do pedido.
+- `weekly-summary` (cron sexta 18h BRT): le `weekly_consumption` e enfileira `weekly_report` no outbox.
+- Agendamento: Netlify Scheduled Functions (config schedule) ou cron no dashboard.
 
-`netlify.toml` já direciona `/api/*` para functions e ativa SPA fallback.
+`netlify.toml` ja direciona `/api/*` para functions e ativa SPA fallback.
 
-### Notificações WhatsApp (Z-API)
+### Notificacoes WhatsApp (Z-API)
 - Tabela `notification_outbox` guarda pendentes (`pending|sent|failed`).
 - Helper SQL `normalize_phone(text)` padroniza para DDI 55.
 - Env vars: `ZAPI_BASE_URL`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_SECURITY_TOKEN`, `APP_BASE_URL`, `WHATSAPP_FROM_NAME`.
+- Use `/api/dispatch-outbox` para enviar pendentes quando o Z-API estiver configurado.
 
 ### Fluxo de compra (obrigatório via RPC)
 - Operador não pode inserir direto em `orders`/`order_items`/`ledger` (policies de insert removidas).
@@ -65,3 +68,8 @@ Função `process_purchase` aplica regra:
 - Conectar Supabase real e ajustar `user_roles` para os logins existentes.
 - Configurar webhook PagSeguro com `PAGSEGURO_WEBHOOK_SECRET`.
 - Integrar envio de mensagens (WhatsApp/Push) usando dados da tabela `alerts`.
+
+
+
+
+

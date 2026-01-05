@@ -1,6 +1,6 @@
 import type { Handler } from '@netlify/functions'
 import { createClient } from '@supabase/supabase-js'
-import { sendWhatsAppText } from './zapiSend'
+import { isZapiConfigured, sendWhatsAppText } from './zapiSend'
 
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -8,6 +8,7 @@ const batchSize = 20
 
 const handler: Handler = async () => {
   if (!supabaseUrl || !supabaseServiceKey) return { statusCode: 500, body: 'Supabase config missing' }
+  if (!isZapiConfigured()) return { statusCode: 200, body: 'Z-API not configured' }
   const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
   const { data: pending, error } = await supabase

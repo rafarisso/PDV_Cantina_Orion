@@ -63,7 +63,7 @@ const POSPage = () => {
         actorRole: role,
       })
       setFeedback(
-        `Compra confirmada. Notificação enviada ao responsável. Novo saldo/limite: ${
+        `Compra confirmada. Notificação registrada para o responsável. Novo saldo/limite: ${
           wallet.model === 'prepaid' ? formatCurrency(wallet.balance) : formatCurrency(wallet.creditLimit - wallet.balance)
         }`,
       )

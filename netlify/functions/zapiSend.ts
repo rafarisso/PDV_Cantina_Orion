@@ -11,6 +11,8 @@ interface SendResult {
 
 const endpoint = () => `${baseUrl.replace(/\/$/, '')}/instances/${instanceId}/token/${token}/message/send-text`
 
+export const isZapiConfigured = () => Boolean(baseUrl && instanceId && token && securityToken)
+
 export const sendWhatsAppText = async (toPhone: string, message: string): Promise<SendResult> => {
   if (!baseUrl || !instanceId || !token || !securityToken) {
     return { ok: false, error: 'Missing Z-API configuration' }

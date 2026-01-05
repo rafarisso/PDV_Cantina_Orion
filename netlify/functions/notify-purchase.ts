@@ -1,6 +1,5 @@
 import type { Handler } from '@netlify/functions'
 import { createClient } from '@supabase/supabase-js'
-import { sendWhatsAppText } from './zapiSend'
 
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -71,8 +70,14 @@ const handler: Handler = async (event) => {
     const toPhone = await normalizePhoneDb(supabase, toPhoneRaw)
 
     const safeItems: any[] = Array.isArray(items) ? items : items ? [items] : []
+    const normalizedItems = safeItems.map((item) => ({
+      name: item.products?.name ?? 'Item',
+      quantity: Number(item.quantity ?? 0),
+      unit_price: Number(item.unit_price ?? 0),
+      total: Number(item.unit_price ?? 0) * Number(item.quantity ?? 0),
+    }))
     const itemsStr =
-      safeItems.map((it) => `${it.quantity}x ${it.products?.name ?? 'Item'} (${formatCurrency(it.unit_price)})`).join(', ') ||
+      normalizedItems.map((item) => `${item.quantity}x ${item.name} (${formatCurrency(item.unit_price)})`).join(', ') ||
       'Itens indisponiveis'
 
     const available =
@@ -87,40 +92,31 @@ const handler: Handler = async (event) => {
       `Itens: ${itemsStr}`,
       `Total: ${formatCurrency(order.total)}`,
       `Situacao: ${student?.pricing_model === 'prepaid' ? 'Pre-pago' : 'Fiado'} | Saldo/Limite disponivel: ${formatCurrency(available)}`,
-      appBase ? `Adicionar saldo: ${appBase}/portal` : '',
+      appBase ? `Adicionar saldo: ${appBase}/painel-do-responsavel` : '',
     ]
       .filter(Boolean)
       .join('\n')
 
-    const { data: outbox } = await supabase
-      .from('notification_outbox')
-      .insert({
-        guardian_id: guardianId,
-        student_id: order.student_id,
-        kind: 'purchase',
-        to_phone: toPhone,
-        payload: { message, orderId },
-      })
-      .select('id')
-      .maybeSingle()
-
-    // Optional eager send
-    const sendResult = await sendWhatsAppText(toPhone, message)
-    if (sendResult.ok) {
-      await supabase
-        .from('notification_outbox')
-        .update({ status: 'sent', sent_at: new Date().toISOString(), attempt_count: 1 })
-        .eq('id', outbox?.id)
-    } else {
-      await supabase
-        .from('notification_outbox')
-        .update({
-          status: 'failed',
-          attempt_count: 1,
-          last_error: sendResult.error ?? 'Erro ao enviar',
-        })
-        .eq('id', outbox?.id)
-    }
+    await supabase.from('notification_outbox').insert({
+      guardian_id: guardianId,
+      student_id: order.student_id,
+      kind: 'purchase',
+      to_phone: toPhone,
+      payload: {
+        message,
+        order_id: order.id,
+        purchased_at: order.created_at,
+        student: {
+          id: order.student_id,
+          full_name: student?.full_name ?? '',
+          grade: student?.grade ?? '',
+          period: student?.period ?? '',
+        },
+        items: normalizedItems,
+        total: Number(order.total ?? 0),
+      },
+      status: 'pending',
+    })
 
     return { statusCode: 200, body: JSON.stringify({ ok: true }) }
   } catch (err) {
