@@ -78,7 +78,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         const walletsRes = await client.from('wallets').select('*')
         const productsRes =
           role === 'admin' || role === 'operator'
-            ? await client.from('products').select('*').order('created_at', { ascending: true })
+            ? await client.from('products').select('*').eq('active', true).order('created_at', { ascending: true })
             : null
 
         let guardiansRes: { data: any; error: any } | null = null
