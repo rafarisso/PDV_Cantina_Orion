@@ -29,12 +29,12 @@ const AdminWalletsPage = () => {
   const { role } = useAuth()
   const { students, wallets: demoWallets, updateWalletModel } = useData()
   const [wallets, setWallets] = useState<WalletRow[]>([])
-  const [loading, setLoading] = useState(!env.isDemo && Boolean(supabase))
+  const [loading, setLoading] = useState(Boolean(supabase))
   const [error, setError] = useState<string | null>(null)
   const [limitDraft, setLimitDraft] = useState<Record<string, number>>({})
 
   const loadWallets = async () => {
-    if (!supabase || env.isDemo) {
+    if (env.isDemo) {
       const fallback = demoWallets.map((wallet) => {
         const student = students.find((s) => s.id === wallet.studentId)
         return {
@@ -51,6 +51,11 @@ const AdminWalletsPage = () => {
           return acc
         }, {}),
       )
+      setLoading(false)
+      return
+    }
+    if (!supabase) {
+      setError('Supabase nao configurado')
       setLoading(false)
       return
     }

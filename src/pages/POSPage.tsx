@@ -54,7 +54,7 @@ const POSPage = () => {
   const cartTotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
 
   const handlePurchase = async () => {
-    if (!selectedStudent || !user) return
+    if (!selectedStudent || !user || !role) return
     try {
       const { wallet, triggeredAlerts } = await recordPurchase({
         studentId: selectedStudent.id,

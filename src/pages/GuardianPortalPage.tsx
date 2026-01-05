@@ -4,7 +4,7 @@ import { useData } from '@/state/DataContext'
 import { supabase } from '@/lib/supabaseClient'
 import { env } from '@/lib/env'
 import { formatCurrency, formatDateTime } from '@/lib/format'
-import type { Student, Wallet } from '@/types/domain'
+import type { Wallet } from '@/types/domain'
 
 interface StudentAssignment {
   student: {
@@ -19,7 +19,7 @@ interface StudentAssignment {
 
 const GuardianPortalPage = () => {
   const { role, user } = useAuth()
-  const { students, wallets, guardians, createPixCharge, registerStudent, orders } = useData()
+  const { orders, createPixCharge } = useData()
   const [assignments, setAssignments] = useState<StudentAssignment[]>([])
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
   const [amount, setAmount] = useState<number>(20)
@@ -27,7 +27,7 @@ const GuardianPortalPage = () => {
   const [message, setMessage] = useState<string | null>(null)
   const [fiadoMessage, setFiadoMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(!env.isDemo && Boolean(supabase))
+  const [loading, setLoading] = useState(Boolean(supabase))
   const [createOpen, setCreateOpen] = useState(false)
   const [createDraft, setCreateDraft] = useState<{ fullName: string; grade: string; period: 'morning' | 'afternoon'; observations: string }>({
     fullName: '',
@@ -39,24 +39,23 @@ const GuardianPortalPage = () => {
 
   const loadAssignments = async () => {
     setError(null)
-    if (env.configError || (!supabase && !env.isDemo)) {
+    if (env.configError || !supabase) {
       setAssignments([])
       setSelectedStudentId(null)
       setError('Supabase nao configurado')
       setLoading(false)
       return
     }
-    if (supabase && !env.isDemo) {
-      if (!user?.id) {
-        setAssignments([])
-        setLoading(false)
-        return
-      }
-      setLoading(true)
-      const { data, error: queryError } = await supabase
-        .from('students')
-        .select(
-          `
+    if (!user?.id) {
+      setAssignments([])
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    const { data, error: queryError } = await supabase
+      .from('students')
+      .select(
+        `
             id,
             full_name,
             grade,
@@ -74,60 +73,41 @@ const GuardianPortalPage = () => {
               last_alert_level
             )
           `,
-        )
-        .eq('guardian_id', user.id)
-      if (queryError) {
-        setError(queryError.message)
-        setLoading(false)
-        return
-      }
-      const mapped: StudentAssignment[] =
-        data?.map((row: any) => {
-          const walletRel = Array.isArray(row.wallets) ? row.wallets[0] : row.wallets
-          const wallet: Wallet | undefined = walletRel
-            ? {
-                id: walletRel.id,
-                studentId: row.id,
-                balance: Number(walletRel.balance ?? 0),
-                creditLimit: Number(walletRel.credit_limit ?? 0),
-                model: walletRel.model,
-                allowNegativeOnceUsed: Boolean(walletRel.allow_negative_once_used),
-                blocked: Boolean(walletRel.blocked),
-                blockedReason: walletRel.blocked_reason ?? undefined,
-                alertBaseline: walletRel.alert_baseline ?? undefined,
-                lastAlertLevel: walletRel.last_alert_level ?? undefined,
-              }
-            : undefined
-          return {
-            student: {
-              id: row.id,
-              fullName: row.full_name,
-              grade: row.grade,
-              period: row.period,
-              guardianId: row.guardian_id,
-            },
-            wallet,
-          }
-        }) ?? []
-      setAssignments(mapped)
-      setSelectedStudentId(mapped[0]?.student.id ?? null)
+      )
+      .eq('guardian_id', user.id)
+    if (queryError) {
+      setError(queryError.message)
       setLoading(false)
       return
     }
-
-    const guardianId = guardians[0]?.id
-    const mapped = students
-      .filter((s) => !guardianId || s.guardianId === guardianId)
-      .map((student) => ({
-        student: {
-          id: student.id,
-          fullName: student.fullName,
-          grade: student.grade,
-          period: student.period,
-          guardianId: student.guardianId,
-        },
-        wallet: wallets.find((w) => w.studentId === student.id),
-      }))
+    const mapped: StudentAssignment[] =
+      data?.map((row: any) => {
+        const walletRel = Array.isArray(row.wallets) ? row.wallets[0] : row.wallets
+        const wallet: Wallet | undefined = walletRel
+          ? {
+              id: walletRel.id,
+              studentId: row.id,
+              balance: Number(walletRel.balance ?? 0),
+              creditLimit: Number(walletRel.credit_limit ?? 0),
+              model: walletRel.model,
+              allowNegativeOnceUsed: Boolean(walletRel.allow_negative_once_used),
+              blocked: Boolean(walletRel.blocked),
+              blockedReason: walletRel.blocked_reason ?? undefined,
+              alertBaseline: walletRel.alert_baseline ?? undefined,
+              lastAlertLevel: walletRel.last_alert_level ?? undefined,
+            }
+          : undefined
+        return {
+          student: {
+            id: row.id,
+            fullName: row.full_name,
+            grade: row.grade,
+            period: row.period,
+            guardianId: row.guardian_id,
+          },
+          wallet,
+        }
+      }) ?? []
     setAssignments(mapped)
     setSelectedStudentId(mapped[0]?.student.id ?? null)
     setLoading(false)
@@ -135,7 +115,13 @@ const GuardianPortalPage = () => {
 
   useEffect(() => {
     void loadAssignments()
-  }, [role, user?.id, students, wallets, guardians])
+  }, [role, user?.id])
+
+  useEffect(() => {
+    if (!loading && assignments.length === 0) {
+      setCreateOpen(true)
+    }
+  }, [assignments.length, loading])
 
   const selected = useMemo(
     () => assignments.find((item) => item.student.id === selectedStudentId),
@@ -192,43 +178,25 @@ const GuardianPortalPage = () => {
     setCreating(true)
     setError(null)
     try {
-      if (env.isDemo || !supabase) {
-        const demoStudent: Student = {
-          id: crypto.randomUUID(),
-          guardianId: user?.id ?? 'guardian-demo',
-          fullName: createDraft.fullName,
+      if (!supabase) {
+        throw new Error('Supabase nao configurado')
+      }
+      // Guardian creates a student tied to their own account.
+      const { data, error: insertError } = await supabase
+        .from('students')
+        .insert({
+          full_name: createDraft.fullName,
           grade: createDraft.grade,
           period: createDraft.period,
+          guardian_id: user?.id,
           status: 'active',
-          pricingModel: 'prepaid',
-          observations: createDraft.observations || undefined,
-        }
-        registerStudent(demoStudent, { creditLimit: 0 })
-        setAssignments((prev) => [
-          ...prev,
-          { student: demoStudent, wallet: { id: crypto.randomUUID(), studentId: demoStudent.id, balance: 0, creditLimit: 0, model: 'prepaid', allowNegativeOnceUsed: false, blocked: false } },
-        ])
-        setSelectedStudentId(demoStudent.id)
-      } else {
-        const persistedGrade =
-          createDraft.observations?.trim().length
-            ? `${createDraft.grade} | Obs: ${createDraft.observations}`
-            : createDraft.grade
-        const { data, error: insertError } = await supabase
-          .from('students')
-          .insert({
-            full_name: createDraft.fullName,
-            grade: persistedGrade,
-            period: createDraft.period,
-            guardian_id: user?.id,
-            status: 'active',
-            pricing_model: 'prepaid',
-          })
-          .select('id')
-          .maybeSingle()
-        if (insertError) throw insertError
-        if (!data?.id) throw new Error('Aluno nao criado')
-      }
+          pricing_model: 'prepaid',
+          observations: createDraft.observations || null,
+        })
+        .select('id')
+        .maybeSingle()
+      if (insertError) throw insertError
+      if (!data?.id) throw new Error('Aluno nao criado')
       setCreateDraft({ fullName: '', grade: '', period: 'morning', observations: '' })
       setCreateOpen(false)
       await loadAssignments()
@@ -239,7 +207,7 @@ const GuardianPortalPage = () => {
     }
   }
 
-  if (role !== 'guardian' && role !== 'admin') {
+  if (role !== 'guardian') {
     return (
       <div className="card">
         <div className="card-title">Acesso restrito</div>
@@ -303,33 +271,43 @@ const GuardianPortalPage = () => {
               </div>
             )}
 
-            <div className="card">
-              <div className="section-title">
-                <h3 style={{ margin: 0 }}>Adicionar creditos</h3>
-                <span className="muted">Sempre via Pix seguro</span>
-              </div>
-              <div className="grid grid-cols-2" style={{ gap: 12 }}>
-                <div className="field">
-                  <label>Valor</label>
-                  <input
-                    className="input"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={amount}
-                    onChange={(e) => setAmount(Number(e.target.value))}
-                  />
+            {selected?.wallet?.model === 'prepaid' ? (
+              <div className="card">
+                <div className="section-title">
+                  <h3 style={{ margin: 0 }}>Adicionar creditos</h3>
+                  <span className="muted">Sempre via Pix seguro</span>
                 </div>
-                <div className="field">
-                  <label>Descricao</label>
-                  <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+                <div className="grid grid-cols-2" style={{ gap: 12 }}>
+                  <div className="field">
+                    <label>Valor</label>
+                    <input
+                      className="input"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={amount}
+                      onChange={(e) => setAmount(Number(e.target.value))}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Descricao</label>
+                    <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+                  </div>
                 </div>
+                {message && <div className="pill positive">{message}</div>}
+                <button className="btn btn-primary" onClick={() => void handleTopup()} disabled={!selectedStudentId}>
+                  Gerar Pix
+                </button>
               </div>
-              {message && <div className="pill positive">{message}</div>}
-              <button className="btn btn-primary" onClick={() => void handleTopup()} disabled={!selectedStudentId}>
-                Gerar Pix
-              </button>
-            </div>
+            ) : (
+              <div className="card">
+                <div className="section-title">
+                  <h3 style={{ margin: 0 }}>Creditos</h3>
+                  <span className="muted">Carteira em modo fiado</span>
+                </div>
+                <p className="muted">Para este aluno, as compras seguem o limite definido pela escola.</p>
+              </div>
+            )}
 
             {canUseFiado && (
               <div className="card">

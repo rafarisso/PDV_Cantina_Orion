@@ -58,7 +58,7 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 const uid = () => crypto.randomUUID()
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
-  const { user } = useAuth()
+  const { user, role } = useAuth()
   const [guardians, setGuardians] = useState<Guardian[]>(env.isDemo ? demoGuardians : [])
   const [students, setStudents] = useState<Student[]>(env.isDemo ? demoStudents : [])
   const [wallets, setWallets] = useState<Wallet[]>(env.isDemo ? demoWallets : [])
@@ -70,35 +70,66 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     const load = async () => {
-      if (env.isDemo || !supabase || !user) return
+      if (env.isDemo || !supabase || !user || !role) return
       try {
-        const [guardiansRes, studentsRes, walletsRes, productsRes, ordersRes, alertsRes] = await Promise.all([
-          supabase.from('guardians').select('*'),
-          supabase.from('students').select('*'),
-          supabase.from('wallets').select('*'),
-          supabase.from('products').select('*').order('created_at', { ascending: true }),
-          supabase
+        const client = supabase
+        // Load only what the current role is allowed to see (RLS-safe).
+        const studentsRes = await client.from('students').select('*')
+        const walletsRes = await client.from('wallets').select('*')
+        const productsRes =
+          role === 'admin' || role === 'operator'
+            ? await client.from('products').select('*').order('created_at', { ascending: true })
+            : null
+
+        let guardiansRes: { data: any; error: any } | null = null
+        let ordersRes: { data: any; error: any } | null = null
+        let alertsRes: { data: any; error: any } | null = null
+
+        if (role === 'admin') {
+          guardiansRes = await client.from('guardians').select('*')
+          ordersRes = await client
             .from('orders')
             .select(
               `
-            id,
-            student_id,
-            total,
-            created_by,
-            created_at,
-            order_items (
-              product_id,
-              quantity,
-              unit_price
-            )
-          `,
+              id,
+              student_id,
+              total,
+              created_by,
+              created_at,
+              order_items (
+                product_id,
+                quantity,
+                unit_price
+              )
+            `,
             )
             .order('created_at', { ascending: false })
-            .limit(100),
-          supabase.from('alerts').select('*').order('created_at', { ascending: false }).limit(100),
-        ])
+            .limit(100)
+          alertsRes = await client.from('alerts').select('*').order('created_at', { ascending: false }).limit(100)
+        }
 
-        if (!guardiansRes.error && guardiansRes.data) {
+        if (role === 'guardian') {
+          ordersRes = await client
+            .from('orders')
+            .select(
+              `
+              id,
+              student_id,
+              total,
+              created_by,
+              created_at,
+              order_items (
+                product_id,
+                quantity,
+                unit_price
+              )
+            `,
+            )
+            .order('created_at', { ascending: false })
+            .limit(50)
+        }
+
+        if (guardiansRes && !guardiansRes.error && guardiansRes.data) {
           setGuardians(
             guardiansRes.data.map((row: any) => ({
               id: row.id,
@@ -122,6 +153,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
               period: row.period,
               status: row.status,
               pricingModel: row.pricing_model,
+              observations: row.observations ?? undefined,
             })),
           )
         }
@@ -143,7 +175,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
           )
         }
 
-        if (!productsRes.error && productsRes.data) {
+        if (productsRes && !productsRes.error && productsRes.data) {
           const mapped: Product[] = productsRes.data.map((row: any) => ({
             id: row.id,
             name: row.name,
@@ -157,7 +189,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
           }
         }
 
-        if (!ordersRes.error && ordersRes.data) {
+        if (ordersRes && !ordersRes.error && ordersRes.data) {
           setOrders(
             ordersRes.data.map((row: any) => ({
               id: row.id,
@@ -176,7 +208,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
           )
         }
 
-        if (!alertsRes.error && alertsRes.data) {
+        if (alertsRes && !alertsRes.error && alertsRes.data) {
           setAlerts(
             alertsRes.data.map((row: any) => ({
               id: row.id,
@@ -195,7 +227,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       }
     }
     void load()
-  }, [user])
+  }, [user, role])
 
   const findWallet = (studentId: string) => wallets.find((w) => w.studentId === studentId)
 
@@ -324,9 +356,6 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
           body: JSON.stringify({ orderId: createdOrderId }),
         }).catch((err: unknown) => console.warn('Falha ao notificar compra via WhatsApp', err))
       }
-      if (env.isDemo) {
-        console.log('[DEMO] notificar compra', createdOrderId)
-      }
       return { order, wallet: updatedWallet, triggeredAlerts: [] }
     }
     if (!env.isDemo) {
@@ -414,6 +443,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const registerGuardian = (data: Guardian) => {
+    if (role !== 'admin') {
+      throw new Error('Apenas administradores podem cadastrar responsaveis')
+    }
     if (!data.fullName || !data.phone || !data.cpf) {
       throw new Error('Dados do responsavel sao obrigatorios')
     }
@@ -421,6 +453,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const registerStudent = (data: Student, options: { creditLimit?: number; alertBaseline?: number }) => {
+    if (role !== 'admin') {
+      throw new Error('Apenas administradores podem cadastrar alunos')
+    }
     if (!data.fullName || !data.guardianId || !data.grade || !data.period) {
       throw new Error('Dados do aluno incompletos')
     }
@@ -491,6 +526,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     amount: number
     description?: string
   }) => {
+    if (role !== 'admin' && role !== 'guardian') {
+      throw new Error('Sem permissao para gerar cobranca Pix')
+    }
     if (!guardianId) throw new Error('Responsavel obrigatorio')
     if (amount <= 0) throw new Error('Valor deve ser maior que zero')
 

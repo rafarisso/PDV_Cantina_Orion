@@ -55,6 +55,7 @@ create table if not exists public.students (
   full_name text not null,
   grade text not null,
   period public.study_period not null,
+  observations text,
   status public.student_status not null default 'active',
   pricing_model public.pricing_model not null default 'prepaid',
   created_at timestamptz not null default now()
@@ -64,6 +65,23 @@ alter table public.students drop column if exists credit_limit;
 alter table public.students drop column if exists allow_negative_once_used;
 alter table public.students drop column if exists blocked;
 alter table public.students drop column if exists blocked_reason;
+alter table public.students add column if not exists observations text;
+
+-- Papel do usuario autenticado (evita SELECT direto em user_roles)
+create or replace function public.get_my_role()
+returns public.user_role
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select role
+  from public.user_roles
+  where user_id = auth.uid()
+  order by case role when 'admin' then 1 when 'operator' then 2 else 3 end
+  limit 1;
+$$;
+grant execute on function public.get_my_role() to authenticated;
 
 create table if not exists public.wallets (
   id uuid primary key default gen_random_uuid(),
@@ -190,7 +208,8 @@ create policy admin_all_ledger on public.ledger for all using (has_role('admin')
 create policy admin_all_pix on public.pix_charges for all using (has_role('admin')) with check (has_role('admin'));
 create policy admin_all_alerts on public.alerts for all using (has_role('admin')) with check (has_role('admin'));
 create policy admin_all_terms on public.terms_acceptance for all using (has_role('admin')) with check (has_role('admin'));
-create policy admin_all_user_roles on public.user_roles for all using (has_role('admin')) with check (has_role('admin'));
+drop policy if exists admin_all_user_roles on public.user_roles;
+create policy user_roles_self_select on public.user_roles for select using (user_id = auth.uid());
 create policy admin_all_notification_outbox on public.notification_outbox for all using (has_role('admin')) with check (has_role('admin'));
 
 -- Operador: apenas leitura de dados operacionais, sem CPF/endereco (consumir via view)
@@ -198,10 +217,32 @@ create policy operator_students_read on public.students for select using (has_ro
 create policy operator_wallets_read on public.wallets for select using (has_role('operator'));
 create policy operator_products_read on public.products for select using (has_role('operator'));
 
--- Responsavel (futuro app): apenas seus dados
-create policy guardian_self on public.guardians for select using (has_role('guardian') and id in (
-  select guardian_id from public.students where guardian_id = public.guardians.id
-));
+-- Responsavel: apenas seus dados
+drop policy if exists guardian_self on public.guardians;
+create policy guardian_self on public.guardians for select using (has_role('guardian') and id = auth.uid());
+
+-- Responsavel: alunos e carteiras vinculados
+create policy guardian_students_select on public.students for select using (has_role('guardian') and guardian_id = auth.uid());
+create policy guardian_students_insert on public.students for insert with check (
+  has_role('guardian')
+  and guardian_id = auth.uid()
+  and status = 'active'
+  and pricing_model = 'prepaid'
+);
+create policy guardian_wallets_select on public.wallets for select using (
+  has_role('guardian') and student_id in (select id from public.students where guardian_id = auth.uid())
+);
+create policy guardian_orders_select on public.orders for select using (
+  has_role('guardian') and student_id in (select id from public.students where guardian_id = auth.uid())
+);
+create policy guardian_order_items_select on public.order_items for select using (
+  has_role('guardian') and order_id in (
+    select o.id from public.orders o
+    join public.students s on s.id = o.student_id
+    where s.guardian_id = auth.uid()
+  )
+);
+create policy guardian_alerts_select on public.alerts for select using (has_role('guardian') and guardian_id = auth.uid());
 
 -- View sem CPF para uso pelo operador
 create or replace view public.guardians_public as

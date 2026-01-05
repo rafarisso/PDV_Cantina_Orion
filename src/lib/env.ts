@@ -10,7 +10,7 @@ export const env = {
   appBaseUrl: appBaseFromEnv ?? (typeof window !== 'undefined' ? window.location.origin : ''),
   isDemo,
   supabaseReady,
-  configError: !isDemo && !supabaseReady,
+  configError: !supabaseReady,
   pagSeguroBaseUrl:
     (import.meta.env.VITE_PAGSEGURO_BASE_URL as string | undefined) ?? 'https://pix.api.pagseguro.com',
 }

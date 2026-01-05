@@ -5,7 +5,7 @@ import { type SessionUser, type UserRole } from '@/types/domain'
 
 interface AuthContextValue {
   user: SessionUser | null
-  role: UserRole
+  role: UserRole | null
   loading: boolean
   isDemo: boolean
   configError: boolean
@@ -16,37 +16,33 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
-const DEMO_USER: SessionUser = {
-  id: 'demo-admin',
-  email: 'demo@orion.app',
-  role: 'admin',
-  fullName: 'Administrador (demo)',
-}
-
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<SessionUser | null>(env.isDemo ? DEMO_USER : null)
-  const [role, setRoleState] = useState<UserRole>(env.isDemo ? 'admin' : 'operator')
-  const [loading, setLoading] = useState(!env.isDemo)
+  const [user, setUser] = useState<SessionUser | null>(null)
+  const [role, setRoleState] = useState<UserRole | null>(null)
+  const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
 
-  const loadRole = async (userId: string): Promise<UserRole> => {
+  // Role is resolved via RPC to avoid direct user_roles selects.
+  const loadRole = async (): Promise<UserRole> => {
     const client = supabase
     if (!client) throw new Error('Supabase nao configurado')
-    const { data, error } = await client.from('user_roles').select('role').eq('user_id', userId).maybeSingle()
+    const { data, error } = await client.rpc('get_my_role')
     if (error) {
       console.warn('Falha ao carregar papel do usuario', error.message)
       throw error
     }
-    if (!data?.role) {
+    const resolvedRole = data as UserRole | null
+    if (!resolvedRole || !['admin', 'operator', 'guardian'].includes(resolvedRole)) {
       throw new Error('Papel nao encontrado para o usuario')
     }
-    return data.role as UserRole
+    return resolvedRole
   }
 
   useEffect(() => {
     if (env.configError) {
       setLoading(false)
       setUser(null)
+      setRoleState(null)
       return
     }
 
@@ -61,30 +57,31 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       .then(({ data }) => {
         const sessionUser = data.session?.user
         if (sessionUser) {
-          loadRole(sessionUser.id)
-            .then((userRole) => {
-              setRoleState(userRole)
-              setUser({
-                id: sessionUser.id,
-                email: sessionUser.email ?? undefined,
-                role: userRole,
-                fullName: sessionUser.user_metadata?.full_name,
-              })
-              setAuthError(null)
+        loadRole()
+          .then((userRole) => {
+            setRoleState(userRole)
+            setUser({
+              id: sessionUser.id,
+              email: sessionUser.email ?? undefined,
+              role: userRole,
+              fullName: sessionUser.user_metadata?.full_name,
             })
-            .catch((err) => {
-              console.warn('Falha ao carregar papel', err)
-              setAuthError('Falha ao validar papel do usuario')
-              void client.auth.signOut()
-              setUser(env.isDemo ? DEMO_USER : null)
-            })
+            setAuthError(null)
+          })
+          .catch((err) => {
+            console.warn('Falha ao carregar papel', err)
+            setAuthError('Falha ao validar papel do usuario')
+            void client.auth.signOut()
+            setUser(null)
+            setRoleState(null)
+          })
         }
       })
       .finally(() => setLoading(false))
 
     const { data: listener } = client.auth.onAuthStateChange((_, session) => {
       if (session?.user) {
-        loadRole(session.user.id)
+        loadRole()
           .then((userRole) => {
             setRoleState(userRole)
             setUser({
@@ -98,10 +95,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           .catch((err) => {
             console.warn('Falha ao carregar papel', err)
             setAuthError('Falha ao validar papel do usuario')
-            setUser(env.isDemo ? DEMO_USER : null)
+            void client.auth.signOut()
+            setUser(null)
+            setRoleState(null)
           })
       } else {
-        setUser(env.isDemo ? DEMO_USER : null)
+        setUser(null)
+        setRoleState(null)
       }
     })
 
@@ -112,12 +112,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     if (env.configError) {
       throw new Error('Configuracao Supabase ausente. Verifique variaveis de ambiente.')
     }
-    if (env.isDemo && !supabase) {
-      setUser(DEMO_USER)
-      setRoleState('admin')
-      setAuthError(null)
-      return 'admin'
-    }
     if (!supabase) {
       throw new Error('Servicos indisponiveis')
     }
@@ -125,7 +119,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
     const sessionUser = data.user
-    const resolvedRole = await loadRole(sessionUser.id)
+    let resolvedRole: UserRole
+    try {
+      resolvedRole = await loadRole()
+    } catch (err) {
+      setAuthError('Papel invalido para este usuario')
+      await supabase.auth.signOut()
+      throw new Error('Papel invalido para este usuario')
+    }
     setRoleState(resolvedRole)
     setUser({
       id: sessionUser.id,
@@ -141,7 +142,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     if (supabase) {
       await supabase.auth.signOut()
     }
-    setUser(env.isDemo ? DEMO_USER : null)
+    setUser(null)
+    setRoleState(null)
     setAuthError(null)
   }
 

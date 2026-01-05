@@ -8,6 +8,7 @@ import BillingPage from '@/pages/BillingPage'
 import LoginPage from '@/pages/LoginPage'
 import AdminWalletsPage from '@/pages/AdminWalletsPage'
 import GuardianPortalPage from '@/pages/GuardianPortalPage'
+import GuardianOnboardingPage from '@/pages/GuardianOnboardingPage'
 import { type UserRole } from '@/types/domain'
 import { LogOut, Menu, PiggyBank, ShieldCheck, ShoppingBag, Wallet } from 'lucide-react'
 
@@ -26,18 +27,18 @@ const App = () => {
   const navigate = useNavigate()
 
   const availableNav = useMemo(
-    () => NAV_ITEMS.filter((item) => item.roles.includes(role)),
+    () => (role ? NAV_ITEMS.filter((item) => item.roles.includes(role)) : []),
     [role],
   )
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !role) return
     if (availableNav.length === 0) return
     const allowed = availableNav.some((item) => item.path === location.pathname)
     if (!allowed) {
       navigate(availableNav[0].path, { replace: true })
     }
-  }, [availableNav, location.pathname, navigate, user])
+  }, [availableNav, location.pathname, navigate, role, user])
 
   if (configError) {
     return (
@@ -45,8 +46,7 @@ const App = () => {
         <div className="card">
           <div className="card-title">Configuracao incompleta</div>
           <p className="muted">
-            Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para executar em producao ou habilite o modo demo com
-            VITE_DEMO=true.
+            Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para executar o sistema com login real.
           </p>
           {authError && <div className="pill danger">{authError}</div>}
         </div>
@@ -55,7 +55,12 @@ const App = () => {
   }
 
   if (loading) return <div className="app-shell">Carregando...</div>
-  if (!user) return <LoginPage />
+  if (!user) {
+    if (location.pathname === '/guardian-onboarding') {
+      return <GuardianOnboardingPage />
+    }
+    return <LoginPage />
+  }
 
   return (
     <div className="app-shell">
@@ -139,7 +144,7 @@ const App = () => {
         <Route
           path="/portal"
           element={
-            <Protected roles={['guardian', 'admin']}>
+            <Protected roles={['guardian']}>
               <GuardianPortalPage />
             </Protected>
           }
@@ -161,7 +166,7 @@ const App = () => {
 
 const Protected = ({ roles, children }: { roles: UserRole[]; children: JSX.Element }) => {
   const { role, user } = useAuth()
-  if (!user || !roles.includes(role)) {
+  if (!user || !role || !roles.includes(role)) {
     return (
       <div className="card">
         <div className="card-title">Acesso restrito</div>
