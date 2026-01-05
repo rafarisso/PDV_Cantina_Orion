@@ -8,7 +8,8 @@ interface AuthContextValue {
   role: UserRole
   loading: boolean
   isDemo: boolean
-  signIn: (email: string, password: string) => Promise<void>
+  configError: boolean
+  signIn: (email: string, password: string) => Promise<UserRole>
   signOut: () => Promise<void>
   setRole: (role: UserRole) => void
 }
@@ -24,20 +25,29 @@ const DEMO_USER: SessionUser = {
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<SessionUser | null>(env.isDemo ? DEMO_USER : null)
-  const [role, setRole] = useState<UserRole>(env.isDemo ? 'admin' : 'operator')
+  const [role, setRoleState] = useState<UserRole>(env.isDemo ? 'admin' : 'operator')
   const [loading, setLoading] = useState(!env.isDemo)
 
   const loadRole = async (userId: string): Promise<UserRole> => {
-    if (!supabase) return 'admin'
+    if (!supabase) throw new Error('Supabase nao configurado')
     const { data, error } = await supabase.from('user_roles').select('role').eq('user_id', userId).maybeSingle()
     if (error) {
       console.warn('Falha ao carregar papel do usuario', error.message)
-      return role
+      throw error
     }
-    return (data?.role as UserRole) ?? role
+    if (!data?.role) {
+      throw new Error('Papel nao encontrado para o usuario')
+    }
+    return data.role as UserRole
   }
 
   useEffect(() => {
+    if (env.configError) {
+      setLoading(false)
+      setUser(null)
+      return
+    }
+
     if (!supabase) {
       setLoading(false)
       return
@@ -48,56 +58,71 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       .then(({ data }) => {
         const sessionUser = data.session?.user
         if (sessionUser) {
-          loadRole(sessionUser.id).then((userRole) => {
-            setRole(userRole)
-            setUser({
-              id: sessionUser.id,
-              email: sessionUser.email ?? undefined,
-              role: userRole,
-              fullName: sessionUser.user_metadata?.full_name,
+          loadRole(sessionUser.id)
+            .then((userRole) => {
+              setRoleState(userRole)
+              setUser({
+                id: sessionUser.id,
+                email: sessionUser.email ?? undefined,
+                role: userRole,
+                fullName: sessionUser.user_metadata?.full_name,
+              })
             })
-          })
+            .catch(() => {
+              setUser(null)
+            })
         }
       })
       .finally(() => setLoading(false))
 
     const { data: listener } = supabase.auth.onAuthStateChange((_, session) => {
       if (session?.user) {
-        loadRole(session.user.id).then((userRole) => {
-          setRole(userRole)
-          setUser({
-            id: session.user.id,
-            email: session.user.email ?? undefined,
-            role: userRole,
-            fullName: session.user.user_metadata?.full_name,
+        loadRole(session.user.id)
+          .then((userRole) => {
+            setRoleState(userRole)
+            setUser({
+              id: session.user.id,
+              email: session.user.email ?? undefined,
+              role: userRole,
+              fullName: session.user.user_metadata?.full_name,
+            })
           })
-        })
+          .catch(() => {
+            setUser(null)
+          })
       } else {
         setUser(env.isDemo ? DEMO_USER : null)
       }
     })
 
     return () => listener?.subscription.unsubscribe()
-  }, [role])
+  }, [])
 
   const signIn = async (email: string, password: string) => {
-    if (!supabase) {
+    if (env.configError) {
+      throw new Error('Configuracao Supabase ausente. Verifique variaveis de ambiente.')
+    }
+    if (env.isDemo && !supabase) {
       setUser(DEMO_USER)
-      setRole('admin')
-      return
+      setRoleState('admin')
+      return 'admin'
+    }
+    if (!supabase) {
+      throw new Error('Servicos indisponiveis')
     }
 
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
     const sessionUser = data.user
     const resolvedRole = await loadRole(sessionUser.id)
-    setRole(resolvedRole)
+    setRoleState(resolvedRole)
     setUser({
       id: sessionUser.id,
       email: sessionUser.email ?? undefined,
       role: resolvedRole,
       fullName: sessionUser.user_metadata?.full_name,
     })
+    return resolvedRole
   }
 
   const signOut = async () => {
@@ -105,6 +130,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       await supabase.auth.signOut()
     }
     setUser(env.isDemo ? DEMO_USER : null)
+    if (!env.isDemo) {
+      setRoleState('operator')
+    }
+  }
+
+  const setRole = (nextRole: UserRole) => {
+    if (!env.isDemo) return
+    setRoleState(nextRole)
   }
 
   const value = useMemo<AuthContextValue>(
@@ -113,6 +146,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       role,
       loading,
       isDemo: env.isDemo,
+      configError: env.configError,
       signIn,
       signOut,
       setRole,

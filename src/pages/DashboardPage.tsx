@@ -27,6 +27,11 @@ const DashboardPage = () => {
 
   useEffect(() => {
     const client = supabase
+    if (env.configError || (!client && !env.isDemo)) {
+      setViewError('Supabase nao configurado')
+      setLoadingViews(false)
+      return
+    }
     if (!client || env.isDemo) {
       setLoadingViews(false)
       return
@@ -135,9 +140,9 @@ const DashboardPage = () => {
   const findStudent = (studentId: string) => students.find((s) => s.id === studentId)
   const findGuardian = (guardianId: string) => guardians.find((g) => g.id === guardianId)
 
-  const effectiveSalesToday = salesToday ?? fallbackSalesToday
-  const effectiveBestClient = bestClient ?? fallbackBestClient ?? undefined
-  const effectiveWeekly = weeklyConsumption.length > 0 ? weeklyConsumption : fallbackWeekly
+  const effectiveSalesToday = env.isDemo ? fallbackSalesToday : salesToday
+  const effectiveBestClient = env.isDemo ? fallbackBestClient ?? undefined : bestClient ?? undefined
+  const effectiveWeekly = env.isDemo ? fallbackWeekly : weeklyConsumption
 
   return (
     <div className="grid" style={{ gap: 16 }}>

@@ -57,13 +57,13 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 const uid = () => crypto.randomUUID()
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
-  const [guardians, setGuardians] = useState<Guardian[]>(demoGuardians)
-  const [students, setStudents] = useState<Student[]>(demoStudents)
-  const [wallets, setWallets] = useState<Wallet[]>(demoWallets)
-  const [products] = useState<Product[]>(demoProducts)
-  const [orders, setOrders] = useState<Order[]>(demoOrders)
-  const [alerts, setAlerts] = useState<Alert[]>(demoAlerts)
-  const [ledger, setLedger] = useState<LedgerEntry[]>(demoLedger)
+  const [guardians, setGuardians] = useState<Guardian[]>(env.isDemo ? demoGuardians : [])
+  const [students, setStudents] = useState<Student[]>(env.isDemo ? demoStudents : [])
+  const [wallets, setWallets] = useState<Wallet[]>(env.isDemo ? demoWallets : [])
+  const [products] = useState<Product[]>(env.isDemo ? demoProducts : [])
+  const [orders, setOrders] = useState<Order[]>(env.isDemo ? demoOrders : [])
+  const [alerts, setAlerts] = useState<Alert[]>(env.isDemo ? demoAlerts : [])
+  const [ledger, setLedger] = useState<LedgerEntry[]>(env.isDemo ? demoLedger : [])
   const [pixCharges, setPixCharges] = useState<PixCharge[]>([])
 
   const findWallet = (studentId: string) => wallets.find((w) => w.studentId === studentId)
@@ -197,6 +197,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         console.log('[DEMO] notificar compra', createdOrderId)
       }
       return { order, wallet: updatedWallet, triggeredAlerts: [] }
+    }
+    if (!env.isDemo) {
+      throw new Error('Servicos indisponiveis. Configure Supabase.')
     }
 
     const total = items.reduce((sum, item) => sum + item.quantity * item.product.price, 0)
@@ -384,6 +387,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       }
       setPixCharges((prev) => [charge, ...prev.filter((c) => c.txid !== charge.txid)])
       return charge
+    }
+    if (!env.isDemo) {
+      throw new Error('Servicos indisponiveis. Configure Supabase.')
     }
 
     const charge: PixCharge = {

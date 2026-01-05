@@ -32,6 +32,13 @@ const GuardianPortalPage = () => {
   useEffect(() => {
     const load = async () => {
       setError(null)
+      if (env.configError || (!supabase && !env.isDemo)) {
+        setAssignments([])
+        setSelectedStudentId(null)
+        setError('Supabase nao configurado')
+        setLoading(false)
+        return
+      }
       if (supabase && !env.isDemo) {
         if (!user?.id) {
           setAssignments([])

@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/state/AuthContext'
 
 const LoginPage = () => {
-  const { signIn, isDemo, setRole } = useAuth()
+  const { signIn, isDemo, setRole, configError } = useAuth()
+  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -13,12 +15,29 @@ const LoginPage = () => {
     setError(null)
     setLoading(true)
     try {
-      await signIn(email, password)
+      const nextRole = await signIn(email, password)
+      if (nextRole === 'guardian') navigate('/portal', { replace: true })
+      else if (nextRole === 'operator') navigate('/pdv', { replace: true })
+      else navigate('/', { replace: true })
     } catch (err) {
       setError((err as Error).message)
     } finally {
       setLoading(false)
     }
+  }
+
+  if (configError) {
+    return (
+      <div className="app-shell" style={{ maxWidth: 520, paddingTop: 80 }}>
+        <div className="card">
+          <div className="card-title">Configuracao incompleta</div>
+          <p className="muted">
+            Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para login em producao ou habilite VITE_DEMO=true para
+            testar sem backend.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -65,18 +84,20 @@ const LoginPage = () => {
             <div className="chips">
               <button
                 className="btn"
-                onClick={() => {
+                onClick={async () => {
                   setRole('admin')
-                  void signIn('', '')
+                  const nextRole = await signIn('', '')
+                  navigate(nextRole === 'operator' ? '/pdv' : '/', { replace: true })
                 }}
               >
                 Entrar como admin (demo)
               </button>
               <button
                 className="btn"
-                onClick={() => {
+                onClick={async () => {
                   setRole('operator')
-                  void signIn('', '')
+                  await signIn('', '')
+                  navigate('/pdv', { replace: true })
                 }}
               >
                 Entrar como operador (demo)
