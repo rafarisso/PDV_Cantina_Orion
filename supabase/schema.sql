@@ -34,12 +34,32 @@ create table if not exists public.guardians (
   phone text not null,
   cpf text not null,
   address jsonb not null,
+  cep text,
+  street text,
+  number text,
+  complement text,
+  neighborhood text,
+  city text,
+  state text,
+  accepted_terms boolean not null default false,
+  accepted_at timestamptz,
+  accepted_ip inet,
   terms_version text not null,
   terms_accepted_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 alter table public.guardians add column if not exists user_id uuid references auth.users (id) on delete cascade;
+alter table public.guardians add column if not exists cep text;
+alter table public.guardians add column if not exists street text;
+alter table public.guardians add column if not exists number text;
+alter table public.guardians add column if not exists complement text;
+alter table public.guardians add column if not exists neighborhood text;
+alter table public.guardians add column if not exists city text;
+alter table public.guardians add column if not exists state text;
+alter table public.guardians add column if not exists accepted_terms boolean not null default false;
+alter table public.guardians add column if not exists accepted_at timestamptz;
+alter table public.guardians add column if not exists accepted_ip inet;
 create unique index if not exists guardians_cpf_idx on public.guardians (cpf);
 
 create table if not exists public.terms_acceptance (
@@ -68,6 +88,7 @@ alter table public.students drop column if exists allow_negative_once_used;
 alter table public.students drop column if exists blocked;
 alter table public.students drop column if exists blocked_reason;
 alter table public.students add column if not exists observations text;
+alter table public.students add column if not exists photo_url text;
 
 -- Papel do usuario autenticado (evita SELECT direto em user_roles)
 create or replace function public.get_my_role()
@@ -84,6 +105,38 @@ as $$
   limit 1;
 $$;
 grant execute on function public.get_my_role() to authenticated;
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_role text;
+begin
+  v_role := new.raw_app_meta_data->>'app_role';
+  if v_role in ('admin', 'operator', 'guardian') then
+    insert into public.user_roles (user_id, role)
+    values (new.id, v_role::public.user_role)
+    on conflict do nothing;
+    return new;
+  end if;
+
+  v_role := new.raw_user_meta_data->>'app_role';
+  if v_role = 'guardian' then
+    insert into public.user_roles (user_id, role)
+    values (new.id, v_role::public.user_role)
+    on conflict do nothing;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_assign_user_role on auth.users;
+create trigger trg_assign_user_role
+after insert on auth.users
+for each row execute procedure public.handle_new_user();
 
 create table if not exists public.wallets (
   id uuid primary key default gen_random_uuid(),
@@ -224,6 +277,10 @@ drop policy if exists guardian_self on public.guardians;
 create policy guardian_self on public.guardians for select using (has_role('guardian') and user_id = auth.uid());
 drop policy if exists guardian_self_insert on public.guardians;
 create policy guardian_self_insert on public.guardians for insert with check (has_role('guardian') and user_id = auth.uid());
+drop policy if exists guardian_self_update on public.guardians;
+create policy guardian_self_update on public.guardians for update
+using (has_role('guardian') and user_id = auth.uid())
+with check (has_role('guardian') and user_id = auth.uid());
 
 -- Responsavel: alunos e carteiras vinculados
 create policy guardian_students_select on public.students for select using (
