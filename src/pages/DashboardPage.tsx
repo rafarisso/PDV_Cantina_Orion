@@ -136,11 +136,12 @@ const DashboardPage = () => {
   const blockedStudents = wallets.filter((w) => w.blocked)
   const latestAlerts = alerts.slice(0, 4)
   const latestOrders = orders.slice(0, 5)
+  const bestWindowTotal = bestWindow?.total ?? 0
 
   const findStudent = (studentId: string) => students.find((s) => s.id === studentId)
   const findGuardian = (guardianId: string) => guardians.find((g) => g.id === guardianId)
 
-  const effectiveSalesToday = env.isDemo ? fallbackSalesToday : salesToday
+  const effectiveSalesToday = env.isDemo ? fallbackSalesToday : (salesToday ?? 0)
   const effectiveBestClient = env.isDemo ? fallbackBestClient ?? undefined : bestClient ?? undefined
   const effectiveWeekly = env.isDemo ? fallbackWeekly : weeklyConsumption
 
@@ -154,7 +155,7 @@ const DashboardPage = () => {
         </div>
         <div className="stat">
           <small>Melhor janela 20 min</small>
-          <strong>{bestWindow?.total ? formatCurrency(bestWindow.total) : 'Sem dados'}</strong>
+          <strong>{bestWindowTotal > 0 ? formatCurrency(bestWindowTotal) : 'Sem dados'}</strong>
           {bestWindow?.window_start && bestWindow?.window_end && (
             <div className="muted">
               {formatDateTime(bestWindow.window_start)} - {formatDateTime(bestWindow.window_end)}
