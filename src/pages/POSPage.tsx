@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Hourglass } from 'lucide-react'
 import { useAuth } from '@/state/AuthContext'
 import { useData } from '@/state/DataContext'
 import { type CartItem, type Product } from '@/types/domain'
@@ -7,21 +8,59 @@ import { formatCurrency, maskCpf } from '@/lib/format'
 const POSPage = () => {
   const { products, students, wallets, guardians, recordPurchase } = useData()
   const { role, user } = useAuth()
-  const [query, setQuery] = useState('')
+  const [studentQuery, setStudentQuery] = useState('')
+  const [productQuery, setProductQuery] = useState('')
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
   const [cart, setCart] = useState<CartItem[]>([])
   const [feedback, setFeedback] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const filteredStudents = useMemo(() => {
-    const q = query.toLowerCase()
+    const q = studentQuery.toLowerCase()
     return students.filter(
       (student) =>
         student.fullName.toLowerCase().includes(q) ||
         student.grade.toLowerCase().includes(q) ||
         student.period.toLowerCase().includes(q),
     )
-  }, [query, students])
+  }, [studentQuery, students])
+
+  const activeProducts = useMemo(() => products.filter((product) => product.active !== false), [products])
+  const filteredProducts = useMemo(() => {
+    const q = productQuery.trim().toLowerCase()
+    if (!q) return activeProducts
+    return activeProducts.filter((product) => product.name.toLowerCase().includes(q))
+  }, [activeProducts, productQuery])
+  const productSuggestions = useMemo(() => {
+    const q = productQuery.trim().toLowerCase()
+    const list = q ? filteredProducts : activeProducts
+    return list.slice(0, 8)
+  }, [activeProducts, filteredProducts, productQuery])
+  const productsByCategory = useMemo(() => {
+    const order = ['Salgados', 'Lanches', 'Bebidas', 'Bomboniere', 'Outros']
+    const normalized: Record<string, Product[]> = {}
+    filteredProducts.forEach((product) => {
+      const raw = product.category?.trim().toLowerCase() ?? ''
+      const category =
+        raw === 'salgados'
+          ? 'Salgados'
+          : raw === 'lanches'
+            ? 'Lanches'
+            : raw === 'bebidas'
+              ? 'Bebidas'
+              : raw === 'bomboniere'
+                ? 'Bomboniere'
+                : 'Outros'
+      if (!normalized[category]) normalized[category] = []
+      normalized[category].push(product)
+    })
+    order.forEach((category) => {
+      if (normalized[category]) {
+        normalized[category] = normalized[category].sort((a, b) => a.name.localeCompare(b.name))
+      }
+    })
+    return { order, normalized }
+  }, [filteredProducts])
 
   const selectedStudent = selectedStudentId
     ? students.find((student) => student.id === selectedStudentId)
@@ -111,8 +150,8 @@ const POSPage = () => {
         <input
           className="input"
           placeholder="Buscar aluno (nome, serie, periodo)..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          value={studentQuery}
+          onChange={(e) => setStudentQuery(e.target.value)}
         />
         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginTop: 12 }}>
           {filteredStudents.map((student) => {
@@ -179,22 +218,61 @@ const POSPage = () => {
               <h3 style={{ margin: 0 }}>Produtos</h3>
               <span className="muted">Toque para adicionar</span>
             </div>
-            <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
-              {products
-                .filter((p) => p.active !== false)
-                .map((product) => (
-                  <button
-                    key={product.id}
-                    className="card"
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => addToCart(product)}
-                  >
-                    <strong>{product.name}</strong>
-                    <div className="muted">{product.category}</div>
-                    <div style={{ marginTop: 8 }}>{formatCurrency(product.price)}</div>
-                  </button>
-                ))}
+            <div className="field" style={{ marginBottom: 10 }}>
+              <label>Buscar produto</label>
+              <div style={{ position: 'relative' }}>
+                <Hourglass
+                  size={16}
+                  style={{
+                    position: 'absolute',
+                    left: 12,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--muted)',
+                  }}
+                />
+                <input
+                  className="input"
+                  list="product-suggestions"
+                  placeholder="Digite o nome ou as primeiras letras..."
+                  value={productQuery}
+                  onChange={(e) => setProductQuery(e.target.value)}
+                  style={{ paddingLeft: 36 }}
+                />
+                <datalist id="product-suggestions">
+                  {productSuggestions.map((product) => (
+                    <option key={product.id} value={product.name} />
+                  ))}
+                </datalist>
+              </div>
             </div>
+            {filteredProducts.length === 0 && <div className="muted">Nenhum produto encontrado.</div>}
+            {productsByCategory.order.map((category) => {
+              const list = productsByCategory.normalized[category] ?? []
+              if (list.length === 0) return null
+              return (
+                <div key={category} style={{ marginBottom: 12 }}>
+                  <div className="section-title" style={{ marginBottom: 8 }}>
+                    <h4 style={{ margin: 0 }}>{category}</h4>
+                    <span className="muted">{list.length} itens</span>
+                  </div>
+                  <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+                    {list.map((product) => (
+                      <button
+                        key={product.id}
+                        className="card"
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => addToCart(product)}
+                      >
+                        <strong>{product.name}</strong>
+                        <div className="muted">{product.category ?? category}</div>
+                        <div style={{ marginTop: 8 }}>{formatCurrency(product.price)}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
           </section>
 
           <section className="card">

@@ -19,6 +19,8 @@ const emptyDraft: ProductDraft = {
   active: true,
 }
 
+const CATEGORY_OPTIONS = ['Salgados', 'Lanches', 'Bebidas', 'Bomboniere']
+
 const ProductsPage = () => {
   const { role } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
@@ -183,8 +185,14 @@ const ProductsPage = () => {
               className="input"
               value={draft.category}
               onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))}
+              list="category-options"
               placeholder="Lanches, Bebidas, Doces..."
             />
+            <datalist id="category-options">
+              {CATEGORY_OPTIONS.map((category) => (
+                <option key={category} value={category} />
+              ))}
+            </datalist>
           </div>
           <div className="field">
             <label>Ativo</label>
