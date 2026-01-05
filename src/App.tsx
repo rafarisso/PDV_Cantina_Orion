@@ -7,6 +7,7 @@ import StudentsPage from '@/pages/StudentsPage'
 import BillingPage from '@/pages/BillingPage'
 import LoginPage from '@/pages/LoginPage'
 import AdminWalletsPage from '@/pages/AdminWalletsPage'
+import ProductsPage from '@/pages/ProductsPage'
 import GuardianPortalPage from '@/pages/GuardianPortalPage'
 import GuardianOnboardingPage from '@/pages/GuardianOnboardingPage'
 import { type UserRole } from '@/types/domain'
@@ -16,6 +17,7 @@ const NAV_ITEMS: { path: string; label: string; roles: UserRole[]; icon: JSX.Ele
   { path: '/', label: 'Painel', roles: ['admin'], icon: <ShieldCheck size={16} /> },
   { path: '/pdv', label: 'PDV', roles: ['admin', 'operator'], icon: <ShoppingBag size={16} /> },
   { path: '/wallets', label: 'Carteiras', roles: ['admin'], icon: <Wallet size={16} /> },
+  { path: '/produtos', label: 'Produtos', roles: ['admin'], icon: <Menu size={16} /> },
   { path: '/students', label: 'Alunos', roles: ['admin'], icon: <Menu size={16} /> },
   { path: '/billing', label: 'Cobrancas Pix', roles: ['admin'], icon: <Menu size={16} /> },
   { path: '/painel-do-responsavel', label: 'Responsavel', roles: ['guardian'], icon: <PiggyBank size={16} /> },
@@ -121,6 +123,14 @@ const App = () => {
           element={
             <Protected roles={['admin', 'operator']}>
               <POSPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/produtos"
+          element={
+            <Protected roles={['admin']}>
+              <ProductsPage />
             </Protected>
           }
         />
