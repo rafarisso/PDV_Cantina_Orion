@@ -136,7 +136,16 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
               fullName: row.full_name,
               phone: row.phone,
               cpf: row.cpf,
-              address: row.address,
+              address:
+                row.address ?? {
+                  street: row.street ?? '',
+                  number: row.number ?? '',
+                  complement: row.complement ?? '',
+                  neighborhood: row.neighborhood ?? '',
+                  city: row.city ?? '',
+                  state: row.state ?? '',
+                  zipCode: row.cep ?? '',
+                },
               termsAcceptedAt: row.terms_accepted_at ?? undefined,
               termsVersion: row.terms_version ?? undefined,
             })),
@@ -154,6 +163,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
               status: row.status,
               pricingModel: row.pricing_model,
               observations: row.observations ?? undefined,
+              photoUrl: row.photo_url ?? undefined,
             })),
           )
         }

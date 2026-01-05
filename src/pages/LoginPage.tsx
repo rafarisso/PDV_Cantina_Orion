@@ -17,8 +17,7 @@ const LoginPage = () => {
     try {
       const nextRole = await signIn(email, password)
       if (nextRole === 'guardian') navigate('/painel-do-responsavel', { replace: true })
-      else if (nextRole === 'operator') navigate('/pdv', { replace: true })
-      else navigate('/', { replace: true })
+      else navigate('/pdv', { replace: true })
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -83,10 +82,10 @@ const LoginPage = () => {
         </form>
         <div className="divider" />
         <div className="card" style={{ background: 'rgba(255,255,255,0.03)' }}>
-          <div className="card-title">Pai ou responsavel</div>
-          <p className="muted">Cadastre-se para acompanhar o consumo do aluno e adicionar creditos.</p>
-          <button className="btn btn-accent" type="button" onClick={() => navigate('/painel-do-responsavel')}>
-            Criar conta / Acessar portal
+          <div className="card-title">Sou pai ou responsavel</div>
+          <p className="muted">Cadastre-se para acompanhar o consumo do aluno e adicionar creditos com seguranca.</p>
+          <button className="btn btn-accent" type="button" onClick={() => navigate('/cadastro-responsavel')}>
+            Sou pai ou responsavel - criar conta
           </button>
         </div>
         {isDemo && <div className="muted">Modo demo ativo apenas por configuracao explicita (VITE_DEMO=true).</div>}

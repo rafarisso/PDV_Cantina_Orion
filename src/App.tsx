@@ -10,12 +10,13 @@ import AdminWalletsPage from '@/pages/AdminWalletsPage'
 import ProductsPage from '@/pages/ProductsPage'
 import GuardianPortalPage from '@/pages/GuardianPortalPage'
 import GuardianOnboardingPage from '@/pages/GuardianOnboardingPage'
+import GuardianSignupPage from '@/pages/GuardianSignupPage'
 import { type UserRole } from '@/types/domain'
 import { LogOut, Menu, PiggyBank, ShieldCheck, ShoppingBag, Wallet } from 'lucide-react'
 
 const NAV_ITEMS: { path: string; label: string; roles: UserRole[]; icon: JSX.Element }[] = [
-  { path: '/', label: 'Painel', roles: ['admin'], icon: <ShieldCheck size={16} /> },
   { path: '/pdv', label: 'PDV', roles: ['admin', 'operator'], icon: <ShoppingBag size={16} /> },
+  { path: '/', label: 'Painel', roles: ['admin'], icon: <ShieldCheck size={16} /> },
   { path: '/wallets', label: 'Carteiras', roles: ['admin'], icon: <Wallet size={16} /> },
   { path: '/produtos', label: 'Produtos', roles: ['admin'], icon: <Menu size={16} /> },
   { path: '/students', label: 'Alunos', roles: ['admin'], icon: <Menu size={16} /> },
@@ -41,7 +42,10 @@ const App = () => {
       role === 'guardian' &&
       (location.pathname === '/painel-do-responsavel/cadastro' || location.pathname === '/guardian-onboarding')
     if (!allowed && !allowOnboarding) {
-      navigate(availableNav[0].path, { replace: true })
+      const fallback = role === 'admin' || role === 'operator' ? '/pdv' : availableNav[0]?.path
+      if (fallback) {
+        navigate(fallback, { replace: true })
+      }
     }
   }, [availableNav, location.pathname, navigate, role, user])
 
@@ -61,12 +65,8 @@ const App = () => {
 
   if (loading) return <div className="app-shell">Carregando...</div>
   if (!user) {
-    if (
-      location.pathname === '/guardian-onboarding' ||
-      location.pathname === '/painel-do-responsavel' ||
-      location.pathname === '/painel-do-responsavel/cadastro'
-    ) {
-      return <GuardianOnboardingPage />
+    if (location.pathname === '/cadastro-responsavel') {
+      return <GuardianSignupPage />
     }
     return <LoginPage />
   }
@@ -174,6 +174,7 @@ const App = () => {
             </Protected>
           }
         />
+        <Route path="/cadastro-responsavel" element={<Navigate to="/painel-do-responsavel" replace />} />
         <Route path="/portal" element={<Navigate to="/painel-do-responsavel" replace />} />
         <Route path="/guardian-onboarding" element={<Navigate to="/painel-do-responsavel/cadastro" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,118 +1,213 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { useAuth } from '@/state/AuthContext'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabaseClient'
-import type { Address } from '@/types/domain'
+import { useAuth } from '@/state/AuthContext'
+import {
+  fetchAddressByCep,
+  fetchPublicIp,
+  formatCep,
+  formatCpf,
+  formatPhone,
+  isValidCpf,
+  onlyDigits,
+} from '@/lib/guardianForm'
 
 const TERMS_VERSION = '2025-01'
 
-const emptyAddress: Address = {
-  street: '',
-  number: '',
-  neighborhood: '',
-  city: '',
-  state: '',
-  zipCode: '',
-  complement: '',
-}
-
 const GuardianOnboardingPage = () => {
-  const { user, role, configError } = useAuth()
+  const { user, role } = useAuth()
   const navigate = useNavigate()
-  const [draft, setDraft] = useState({
+  const [loading, setLoading] = useState(false)
+  const [checking, setChecking] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [guardianId, setGuardianId] = useState<string | null>(null)
+  const [studentCount, setStudentCount] = useState(0)
+  const [existingAcceptedAt, setExistingAcceptedAt] = useState<string | null>(null)
+  const [existingAcceptedIp, setExistingAcceptedIp] = useState<string | null>(null)
+  const [lastCepLookup, setLastCepLookup] = useState<string | null>(null)
+  const [cepFeedback, setCepFeedback] = useState<string | null>(null)
+  const [guardianForm, setGuardianForm] = useState({
     fullName: '',
-    phone: '',
+    email: '',
     cpf: '',
-    address: emptyAddress,
+    phone: '',
+    cep: '',
+    street: '',
+    number: '',
+    complement: '',
+    neighborhood: '',
+    city: '',
+    state: '',
     terms: false,
   })
-  const [checking, setChecking] = useState(Boolean(supabase))
-  const [loading, setLoading] = useState(false)
-  const [hasGuardian, setHasGuardian] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [studentForm, setStudentForm] = useState({
+    fullName: '',
+    grade: '',
+    period: 'morning',
+    photo: null as File | null,
+  })
+  const [savingStudent, setSavingStudent] = useState(false)
 
   const loadGuardian = async () => {
     setError(null)
-    setHasGuardian(false)
-    if (configError || !supabase) {
-      setChecking(false)
-      setError('Supabase nao configurado')
-      return
-    }
-    if (!user?.id) {
+    if (!supabase || !user?.id) {
       setChecking(false)
       return
     }
     setChecking(true)
-    const { data, error: guardianError } = await supabase
+    const { data: authData } = await supabase.auth.getUser()
+    const metadata = authData.user?.user_metadata ?? {}
+    const email = authData.user?.email ?? ''
+    const metaAcceptedAt = typeof metadata.accepted_at === 'string' ? metadata.accepted_at : null
+    const metaAcceptedIp = typeof metadata.accepted_ip === 'string' ? metadata.accepted_ip : null
+
+    const { data: guardian, error: guardianError } = await supabase
       .from('guardians')
-      .select('id')
+      .select(
+        'id, full_name, cpf, phone, cep, street, number, complement, neighborhood, city, state, accepted_terms, accepted_at, accepted_ip, address',
+      )
       .eq('user_id', user.id)
       .maybeSingle()
     if (guardianError) {
-      setError(`Falha ao verificar cadastro: ${guardianError.message}`)
+      setError(`Falha ao carregar cadastro: ${guardianError.message}`)
       setChecking(false)
       return
     }
-    setHasGuardian(Boolean(data?.id))
+
+    const address = (guardian?.address ?? metadata.address ?? {}) as {
+      zipCode?: string
+      street?: string
+      number?: string
+      complement?: string
+      neighborhood?: string
+      city?: string
+      state?: string
+    }
+
+    setGuardianId(guardian?.id ?? null)
+    setExistingAcceptedAt(guardian?.accepted_at ?? metaAcceptedAt ?? null)
+    setExistingAcceptedIp(guardian?.accepted_ip ?? metaAcceptedIp ?? null)
+    setGuardianForm({
+      fullName: guardian?.full_name ?? metadata.full_name ?? '',
+      email,
+      cpf: formatCpf(guardian?.cpf ?? metadata.cpf ?? ''),
+      phone: formatPhone(guardian?.phone ?? metadata.phone ?? ''),
+      cep: formatCep(guardian?.cep ?? metadata.cep ?? address.zipCode ?? ''),
+      street: guardian?.street ?? metadata.street ?? address.street ?? '',
+      number: guardian?.number ?? metadata.number ?? address.number ?? '',
+      complement: guardian?.complement ?? metadata.complement ?? address.complement ?? '',
+      neighborhood: guardian?.neighborhood ?? metadata.neighborhood ?? address.neighborhood ?? '',
+      city: guardian?.city ?? metadata.city ?? address.city ?? '',
+      state: guardian?.state ?? metadata.state ?? address.state ?? '',
+      terms: Boolean(guardian?.accepted_terms ?? metadata.accepted_terms ?? false),
+    })
+
+    if (guardian?.id) {
+      const { count } = await supabase
+        .from('students')
+        .select('id', { count: 'exact', head: true })
+        .eq('guardian_id', guardian.id)
+      setStudentCount(count ?? 0)
+    } else {
+      setStudentCount(0)
+    }
     setChecking(false)
   }
 
   useEffect(() => {
-    void loadGuardian()
-  }, [user?.id])
+    if (role === 'guardian') {
+      void loadGuardian()
+    }
+  }, [role, user?.id])
 
-  const handleSubmit = async (event: React.FormEvent) => {
+  useEffect(() => {
+    const cepDigits = onlyDigits(guardianForm.cep)
+    if (cepDigits.length !== 8 || cepDigits === lastCepLookup) return
+    setLastCepLookup(cepDigits)
+    setCepFeedback('Buscando endereco pelo CEP...')
+    fetchAddressByCep(cepDigits)
+      .then((address) => {
+        if (!address) {
+          setCepFeedback('CEP nao encontrado.')
+          return
+        }
+        setGuardianForm((prev) => ({
+          ...prev,
+          street: prev.street || address.street,
+          neighborhood: prev.neighborhood || address.neighborhood,
+          city: prev.city || address.city,
+          state: prev.state || address.state,
+        }))
+        setCepFeedback(null)
+      })
+      .catch(() => setCepFeedback('Falha ao consultar o CEP.'))
+  }, [guardianForm.cep, lastCepLookup])
+
+  const guardianComplete =
+    guardianForm.fullName &&
+    guardianForm.cpf &&
+    guardianForm.phone &&
+    guardianForm.cep &&
+    guardianForm.street &&
+    guardianForm.number &&
+    guardianForm.neighborhood &&
+    guardianForm.city &&
+    guardianForm.state &&
+    guardianForm.terms &&
+    isValidCpf(guardianForm.cpf)
+
+  const handleSaveGuardian = async (event: React.FormEvent) => {
     event.preventDefault()
     setError(null)
-    if (!supabase) {
-      setError('Supabase nao configurado')
+    if (!supabase || !user?.id) {
+      setError('Usuario nao autenticado.')
       return
     }
-    if (!user?.id) {
-      setError('Usuario nao autenticado. Faca login para continuar.')
-      return
-    }
-    if (role !== 'guardian') {
-      setError('Acesso restrito ao papel de responsavel.')
-      return
-    }
-    if (
-      !draft.fullName ||
-      !draft.phone ||
-      !draft.cpf ||
-      !draft.address.zipCode ||
-      !draft.address.street ||
-      !draft.address.number ||
-      !draft.address.neighborhood ||
-      !draft.address.city ||
-      !draft.address.state
-    ) {
-      setError('Preencha todos os campos obrigatorios.')
-      return
-    }
-    if (!draft.terms) {
-      setError('Aceite os termos para continuar.')
+    if (!guardianComplete) {
+      setError('Preencha todos os dados obrigatorios corretamente.')
       return
     }
     setLoading(true)
     try {
-      const { data, error: insertError } = await supabase
-        .from('guardians')
-        .insert({
-          user_id: user.id,
-          full_name: draft.fullName,
-          phone: draft.phone,
-          cpf: draft.cpf,
-          address: draft.address,
-          terms_version: TERMS_VERSION,
-        })
-        .select('id')
-        .maybeSingle()
-      if (insertError) throw insertError
-      if (!data?.id) throw new Error('Cadastro nao foi concluido.')
+      const acceptedAt = existingAcceptedAt ?? new Date().toISOString()
+      const acceptedIp = existingAcceptedIp ?? (await fetchPublicIp())
+      const address = {
+        street: guardianForm.street,
+        number: guardianForm.number,
+        complement: guardianForm.complement,
+        neighborhood: guardianForm.neighborhood,
+        city: guardianForm.city,
+        state: guardianForm.state,
+        zipCode: onlyDigits(guardianForm.cep),
+      }
+      const payload = {
+        user_id: user.id,
+        full_name: guardianForm.fullName.trim(),
+        cpf: onlyDigits(guardianForm.cpf),
+        phone: onlyDigits(guardianForm.phone),
+        cep: onlyDigits(guardianForm.cep),
+        street: guardianForm.street,
+        number: guardianForm.number,
+        complement: guardianForm.complement || null,
+        neighborhood: guardianForm.neighborhood,
+        city: guardianForm.city,
+        state: guardianForm.state,
+        address,
+        accepted_terms: true,
+        accepted_at: acceptedAt,
+        accepted_ip: acceptedIp ?? null,
+        terms_version: TERMS_VERSION,
+        terms_accepted_at: acceptedAt,
+      }
+      if (guardianId) {
+        const { error: updateError } = await supabase.from('guardians').update(payload).eq('id', guardianId)
+        if (updateError) throw updateError
+      } else {
+        const { data, error: insertError } = await supabase.from('guardians').insert(payload).select('id').maybeSingle()
+        if (insertError) throw insertError
+        setGuardianId(data?.id ?? null)
+      }
       await loadGuardian()
-      navigate('/painel-do-responsavel', { replace: true })
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -120,41 +215,61 @@ const GuardianOnboardingPage = () => {
     }
   }
 
-  if (configError) {
-    return (
-      <div className="app-shell" style={{ maxWidth: 640, paddingTop: 64 }}>
-        <div className="card">
-          <div className="card-title">Configuracao incompleta</div>
-          <p className="muted">Defina as variaveis do Supabase para habilitar o cadastro.</p>
-        </div>
-      </div>
-    )
+  const handleStudentSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError(null)
+    if (!supabase || !guardianId) {
+      setError('Cadastro do responsavel nao localizado.')
+      return
+    }
+    if (!studentForm.fullName || !studentForm.grade) {
+      setError('Informe nome e serie do aluno.')
+      return
+    }
+    if (!studentForm.photo) {
+      setError('Envie a foto do aluno.')
+      return
+    }
+    setSavingStudent(true)
+    try {
+      const studentId = crypto.randomUUID()
+      let photoUrl: string | null = null
+      if (studentForm.photo) {
+        const extension = studentForm.photo.name.split('.').pop() ?? 'jpg'
+        const photoPath = `guardians/${guardianId}/${studentId}.${extension}`
+        const { error: uploadError } = await supabase.storage
+          .from('student-photos')
+          .upload(photoPath, studentForm.photo, { upsert: true })
+        if (uploadError) throw uploadError
+        const { data: publicUrl } = supabase.storage.from('student-photos').getPublicUrl(photoPath)
+        photoUrl = publicUrl.publicUrl
+      }
+      const { error: insertError } = await supabase.from('students').insert({
+        id: studentId,
+        guardian_id: guardianId,
+        full_name: studentForm.fullName,
+        grade: studentForm.grade,
+        period: studentForm.period,
+        status: 'active',
+        pricing_model: 'prepaid',
+        photo_url: photoUrl,
+      })
+      if (insertError) throw insertError
+      setStudentForm({ fullName: '', grade: '', period: 'morning', photo: null })
+      setStudentCount((prev) => prev + 1)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSavingStudent(false)
+    }
   }
 
   if (!user) {
     return (
-      <div className="app-shell" style={{ maxWidth: 620, paddingTop: 64 }}>
+      <div className="app-shell" style={{ maxWidth: 640, paddingTop: 64 }}>
         <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
-            <img src="/logo-orion.png" alt="Cantina Orion" className="logo-mark" style={{ width: 88, height: 88 }} />
-          </div>
-          <div className="card-title">Portal do responsavel</div>
-          <p className="muted">
-            Este acesso permite acompanhar o consumo do aluno, ver saldo e adicionar creditos com Pix seguro.
-          </p>
-          <div className="card" style={{ background: 'rgba(255,255,255,0.03)' }}>
-            <strong>Como funciona</strong>
-            <ol style={{ marginTop: 8 }}>
-              <li>Solicite o acesso ao portal com a escola.</li>
-              <li>Entre com suas credenciais e complete o cadastro.</li>
-              <li>Acompanhe o consumo e recarregue a carteira quando precisar.</li>
-            </ol>
-          </div>
-          <div className="chips" style={{ marginTop: 14 }}>
-            <Link to="/" className="btn btn-primary">
-              Voltar para o login
-            </Link>
-          </div>
+          <div className="card-title">Acesso restrito</div>
+          <p className="muted">Faca login para continuar.</p>
         </div>
       </div>
     )
@@ -172,28 +287,36 @@ const GuardianOnboardingPage = () => {
   }
 
   return (
-    <div className="grid" style={{ gap: 16, maxWidth: 720, margin: '0 auto' }}>
-      <section className="card">
-        <div className="card-title">Cadastro do responsavel</div>
-        <p className="muted">Confirme seus dados para liberar o acesso ao portal do aluno.</p>
-        {checking && <div className="muted">Verificando cadastro...</div>}
-        {error && <div className="pill danger">{error}</div>}
-        {hasGuardian ? (
-          <div className="card" style={{ background: 'rgba(255,255,255,0.03)' }}>
-            <p className="muted">Seu cadastro ja esta completo.</p>
-            <button className="btn btn-primary" onClick={() => navigate('/painel-do-responsavel')}>
-              Ir para o portal
-            </button>
+    <div className="app-shell" style={{ maxWidth: 860, paddingTop: 48 }}>
+      <div className="grid" style={{ gap: 16 }}>
+        <section className="card">
+          <div className="section-title">
+            <h3 style={{ margin: 0 }}>Etapa 1 - Dados do responsavel</h3>
+            <span className="muted">Preencha os dados obrigatorios para liberar o acesso.</span>
           </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="grid grid-cols-2" style={{ gap: 12 }}>
+          {checking && <div className="muted">Carregando cadastro...</div>}
+          {error && <div className="pill danger">{error}</div>}
+          <form onSubmit={handleSaveGuardian} className="grid grid-cols-2" style={{ gap: 12 }}>
             <div className="field">
               <label>Nome completo</label>
               <input
                 className="input"
                 required
-                value={draft.fullName}
-                onChange={(event) => setDraft((prev) => ({ ...prev, fullName: event.target.value }))}
+                value={guardianForm.fullName}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, fullName: event.target.value }))}
+              />
+            </div>
+            <div className="field">
+              <label>Email</label>
+              <input className="input" value={guardianForm.email} disabled />
+            </div>
+            <div className="field">
+              <label>CPF</label>
+              <input
+                className="input"
+                required
+                value={guardianForm.cpf}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, cpf: formatCpf(event.target.value) }))}
               />
             </div>
             <div className="field">
@@ -201,17 +324,8 @@ const GuardianOnboardingPage = () => {
               <input
                 className="input"
                 required
-                value={draft.phone}
-                onChange={(event) => setDraft((prev) => ({ ...prev, phone: event.target.value }))}
-              />
-            </div>
-            <div className="field">
-              <label>CPF</label>
-              <input
-                className="input"
-                required
-                value={draft.cpf}
-                onChange={(event) => setDraft((prev) => ({ ...prev, cpf: event.target.value }))}
+                value={guardianForm.phone}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, phone: formatPhone(event.target.value) }))}
               />
             </div>
             <div className="field">
@@ -219,21 +333,18 @@ const GuardianOnboardingPage = () => {
               <input
                 className="input"
                 required
-                value={draft.address.zipCode}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, address: { ...prev.address, zipCode: event.target.value } }))
-                }
+                value={guardianForm.cep}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, cep: formatCep(event.target.value) }))}
               />
+              {cepFeedback && <div className="muted">{cepFeedback}</div>}
             </div>
             <div className="field">
-              <label>Rua</label>
+              <label>Logradouro</label>
               <input
                 className="input"
                 required
-                value={draft.address.street}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, address: { ...prev.address, street: event.target.value } }))
-                }
+                value={guardianForm.street}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, street: event.target.value }))}
               />
             </div>
             <div className="field">
@@ -241,10 +352,16 @@ const GuardianOnboardingPage = () => {
               <input
                 className="input"
                 required
-                value={draft.address.number}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, address: { ...prev.address, number: event.target.value } }))
-                }
+                value={guardianForm.number}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, number: event.target.value }))}
+              />
+            </div>
+            <div className="field">
+              <label>Complemento</label>
+              <input
+                className="input"
+                value={guardianForm.complement}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, complement: event.target.value }))}
               />
             </div>
             <div className="field">
@@ -252,10 +369,8 @@ const GuardianOnboardingPage = () => {
               <input
                 className="input"
                 required
-                value={draft.address.neighborhood}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, address: { ...prev.address, neighborhood: event.target.value } }))
-                }
+                value={guardianForm.neighborhood}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, neighborhood: event.target.value }))}
               />
             </div>
             <div className="field">
@@ -263,48 +378,108 @@ const GuardianOnboardingPage = () => {
               <input
                 className="input"
                 required
-                value={draft.address.city}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, address: { ...prev.address, city: event.target.value } }))
-                }
+                value={guardianForm.city}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, city: event.target.value }))}
               />
             </div>
             <div className="field">
-              <label>Estado</label>
+              <label>Estado (UF)</label>
               <input
                 className="input"
                 required
-                value={draft.address.state}
+                maxLength={2}
+                value={guardianForm.state}
                 onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, address: { ...prev.address, state: event.target.value } }))
+                  setGuardianForm((prev) => ({ ...prev, state: event.target.value.toUpperCase() }))
                 }
               />
             </div>
-            <div className="field">
-              <label>Complemento</label>
-              <input
-                className="input"
-                value={draft.address.complement}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, address: { ...prev.address, complement: event.target.value } }))
-                }
-              />
-            </div>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', gridColumn: '1 / -1' }}>
               <input
                 type="checkbox"
-                checked={draft.terms}
-                onChange={(event) => setDraft((prev) => ({ ...prev, terms: event.target.checked }))}
+                checked={guardianForm.terms}
+                onChange={(event) => setGuardianForm((prev) => ({ ...prev, terms: event.target.checked }))}
                 required
               />
-              Confirmo aceite dos termos e consentimentos (LGPD)
+              Li e aceito os Termos de Uso e a Politica de Privacidade, conforme a LGPD, e autorizo o uso dos meus
+              dados para fins de controle de consumo escolar e cobranca.
             </label>
-            <button className="btn btn-primary" type="submit" disabled={loading}>
-              {loading ? 'Salvando...' : 'Concluir cadastro'}
-            </button>
+            <div className="chips" style={{ gridColumn: '1 / -1' }}>
+              <button className="btn btn-primary" type="submit" disabled={loading || checking}>
+                {loading ? 'Salvando...' : 'Salvar dados'}
+              </button>
+            </div>
           </form>
+        </section>
+
+        {guardianComplete && (
+          <section className="card">
+            <div className="section-title">
+              <h3 style={{ margin: 0 }}>Etapa 2 - Cadastro do aluno</h3>
+              <span className="muted">Cadastre o primeiro aluno para liberar o painel.</span>
+            </div>
+            {studentCount > 0 ? (
+              <div className="card" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <p className="muted">Cadastro concluido. Voce ja possui aluno cadastrado.</p>
+                <button className="btn btn-primary" onClick={() => navigate('/painel-do-responsavel')}>
+                  Ir para o painel
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleStudentSubmit} className="grid grid-cols-2" style={{ gap: 12 }}>
+                <div className="field">
+                  <label>Nome completo do aluno</label>
+                  <input
+                    className="input"
+                    required
+                    value={studentForm.fullName}
+                    onChange={(event) => setStudentForm((prev) => ({ ...prev, fullName: event.target.value }))}
+                  />
+                </div>
+                <div className="field">
+                  <label>Serie</label>
+                  <input
+                    className="input"
+                    required
+                    value={studentForm.grade}
+                    onChange={(event) => setStudentForm((prev) => ({ ...prev, grade: event.target.value }))}
+                  />
+                </div>
+                <div className="field">
+                  <label>Periodo</label>
+                  <select
+                    className="input"
+                    value={studentForm.period}
+                    onChange={(event) => setStudentForm((prev) => ({ ...prev, period: event.target.value }))}
+                  >
+                    <option value="morning">Manha</option>
+                    <option value="afternoon">Tarde</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Foto do aluno</label>
+                  <input
+                    className="input"
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) =>
+                      setStudentForm((prev) => ({
+                        ...prev,
+                        photo: event.target.files?.[0] ?? null,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="chips" style={{ gridColumn: '1 / -1' }}>
+                  <button className="btn btn-primary" type="submit" disabled={savingStudent}>
+                    {savingStudent ? 'Salvando...' : 'Cadastrar aluno'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </section>
         )}
-      </section>
+      </div>
     </div>
   )
 }

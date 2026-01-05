@@ -61,7 +61,9 @@ const GuardianPortalPage = () => {
     setGuardianLoading(true)
     const { data, error: guardianError } = await supabase
       .from('guardians')
-      .select('id, full_name, phone, cpf, address, terms_version, terms_accepted_at')
+      .select(
+        'id, full_name, phone, cpf, address, terms_version, terms_accepted_at, cep, street, number, neighborhood, city, state, accepted_terms',
+      )
       .eq('user_id', user.id)
       .maybeSingle()
     if (guardianError) {
@@ -77,6 +79,21 @@ const GuardianPortalPage = () => {
       setNeedsOnboarding(true)
       setGuardianLoading(false)
       return
+    }
+    const isComplete = Boolean(
+      data.full_name &&
+        data.cpf &&
+        data.phone &&
+        data.cep &&
+        data.street &&
+        data.number &&
+        data.neighborhood &&
+        data.city &&
+        data.state &&
+        data.accepted_terms,
+    )
+    if (!isComplete) {
+      setNeedsOnboarding(true)
     }
     setGuardian({
       id: data.id,
@@ -166,10 +183,16 @@ const GuardianPortalPage = () => {
   }, [role, user?.id])
 
   useEffect(() => {
-    if (guardian?.id) {
+    if (guardian?.id && !needsOnboarding) {
       void loadAssignments(guardian.id)
     }
-  }, [guardian?.id])
+  }, [guardian?.id, needsOnboarding])
+
+  useEffect(() => {
+    if (needsOnboarding && !guardianLoading) {
+      navigate('/painel-do-responsavel/cadastro')
+    }
+  }, [guardianLoading, navigate, needsOnboarding])
 
   useEffect(() => {
     if (!loading && assignments.length === 0 && guardian && !needsOnboarding) {

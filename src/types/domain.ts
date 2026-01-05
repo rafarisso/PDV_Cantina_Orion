@@ -24,6 +24,16 @@ export interface Guardian {
   phone: string
   cpf: string
   address: Address
+  cep?: string
+  street?: string
+  number?: string
+  complement?: string
+  neighborhood?: string
+  city?: string
+  state?: string
+  acceptedTerms?: boolean
+  acceptedAt?: string
+  acceptedIp?: string
   termsAcceptedAt?: string
   termsVersion?: string
 }
@@ -37,6 +47,7 @@ export interface Student {
   status: StudentStatus
   pricingModel: PricingModel
   observations?: string
+  photoUrl?: string
 }
 
 export interface Wallet {
