@@ -29,6 +29,7 @@ create table if not exists public.user_roles (
 
 create table if not exists public.guardians (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users (id) on delete cascade,
   full_name text not null,
   phone text not null,
   cpf text not null,
@@ -38,6 +39,7 @@ create table if not exists public.guardians (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.guardians add column if not exists user_id uuid references auth.users (id) on delete cascade;
 create unique index if not exists guardians_cpf_idx on public.guardians (cpf);
 
 create table if not exists public.terms_acceptance (
@@ -219,30 +221,44 @@ create policy operator_products_read on public.products for select using (has_ro
 
 -- Responsavel: apenas seus dados
 drop policy if exists guardian_self on public.guardians;
-create policy guardian_self on public.guardians for select using (has_role('guardian') and id = auth.uid());
+create policy guardian_self on public.guardians for select using (has_role('guardian') and user_id = auth.uid());
+drop policy if exists guardian_self_insert on public.guardians;
+create policy guardian_self_insert on public.guardians for insert with check (has_role('guardian') and user_id = auth.uid());
 
 -- Responsavel: alunos e carteiras vinculados
-create policy guardian_students_select on public.students for select using (has_role('guardian') and guardian_id = auth.uid());
+create policy guardian_students_select on public.students for select using (
+  has_role('guardian')
+  and guardian_id in (select id from public.guardians where user_id = auth.uid())
+);
 create policy guardian_students_insert on public.students for insert with check (
   has_role('guardian')
-  and guardian_id = auth.uid()
+  and guardian_id in (select id from public.guardians where user_id = auth.uid())
   and status = 'active'
   and pricing_model = 'prepaid'
 );
 create policy guardian_wallets_select on public.wallets for select using (
-  has_role('guardian') and student_id in (select id from public.students where guardian_id = auth.uid())
+  has_role('guardian')
+  and student_id in (
+    select id from public.students where guardian_id in (select id from public.guardians where user_id = auth.uid())
+  )
 );
 create policy guardian_orders_select on public.orders for select using (
-  has_role('guardian') and student_id in (select id from public.students where guardian_id = auth.uid())
+  has_role('guardian')
+  and student_id in (
+    select id from public.students where guardian_id in (select id from public.guardians where user_id = auth.uid())
+  )
 );
 create policy guardian_order_items_select on public.order_items for select using (
   has_role('guardian') and order_id in (
     select o.id from public.orders o
     join public.students s on s.id = o.student_id
-    where s.guardian_id = auth.uid()
+    where s.guardian_id in (select id from public.guardians where user_id = auth.uid())
   )
 );
-create policy guardian_alerts_select on public.alerts for select using (has_role('guardian') and guardian_id = auth.uid());
+create policy guardian_alerts_select on public.alerts for select using (
+  has_role('guardian')
+  and guardian_id in (select id from public.guardians where user_id = auth.uid())
+);
 
 -- View sem CPF para uso pelo operador
 create or replace view public.guardians_public as
