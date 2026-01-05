@@ -16,7 +16,7 @@ const LoginPage = () => {
     setLoading(true)
     try {
       const nextRole = await signIn(email, password)
-      if (nextRole === 'guardian') navigate('/portal', { replace: true })
+      if (nextRole === 'guardian') navigate('/painel-do-responsavel', { replace: true })
       else if (nextRole === 'operator') navigate('/pdv', { replace: true })
       else navigate('/', { replace: true })
     } catch (err) {
@@ -40,26 +40,26 @@ const LoginPage = () => {
   }
 
   return (
-    <div className="app-shell" style={{ maxWidth: 560, paddingTop: 64 }}>
+    <div className="app-shell" style={{ maxWidth: 620, paddingTop: 64 }}>
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
-        <img src="/logo-orion.png" alt="Cantina Órion" className="logo-mark" style={{ width: 96, height: 96 }} />
+        <img src="/logo-orion.png" alt="Cantina Órion" className="logo-mark" style={{ width: 120, height: 120 }} />
       </div>
       <div className="card">
         <div style={{ textAlign: 'center', marginBottom: 10 }}>
-          <div className="brand" style={{ fontSize: 22, marginBottom: 6 }}>
+          <div className="brand" style={{ fontSize: 24, marginBottom: 6 }}>
             Cantina Orion
           </div>
-          <div className="muted">Acesso seguro ao PDV e ao portal do aluno.</div>
+          <div className="muted">Sistema oficial da escola para PDV, cobrancas e portal do responsavel.</div>
         </div>
         <div className="card-title">Entrar</div>
         <form onSubmit={handleLogin} className="grid" style={{ marginTop: 14, gap: 12 }}>
           <div className="field">
-            <label>Email institucional</label>
+            <label>Email</label>
             <input
               className="input"
               type="email"
               required
-              placeholder="admin@orion.com"
+              placeholder="seuemail@dominio.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
@@ -85,8 +85,8 @@ const LoginPage = () => {
         <div className="card" style={{ background: 'rgba(255,255,255,0.03)' }}>
           <div className="card-title">Pai ou responsavel</div>
           <p className="muted">Cadastre-se para acompanhar o consumo do aluno e adicionar creditos.</p>
-          <button className="btn" type="button" onClick={() => navigate('/guardian-onboarding')}>
-            Sou pai ou responsavel
+          <button className="btn btn-accent" type="button" onClick={() => navigate('/painel-do-responsavel')}>
+            Criar conta / Acessar portal
           </button>
         </div>
         {isDemo && <div className="muted">Modo demo ativo apenas por configuracao explicita (VITE_DEMO=true).</div>}

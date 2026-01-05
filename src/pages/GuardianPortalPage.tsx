@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/state/AuthContext'
 import { useData } from '@/state/DataContext'
 import { supabase } from '@/lib/supabaseClient'
 import { env } from '@/lib/env'
 import { formatCurrency, formatDateTime } from '@/lib/format'
-import type { Wallet } from '@/types/domain'
+import type { Guardian, Wallet } from '@/types/domain'
 
 interface StudentAssignment {
   student: {
@@ -20,14 +21,18 @@ interface StudentAssignment {
 const GuardianPortalPage = () => {
   const { role, user } = useAuth()
   const { orders, createPixCharge } = useData()
+  const navigate = useNavigate()
   const [assignments, setAssignments] = useState<StudentAssignment[]>([])
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
+  const [guardian, setGuardian] = useState<Guardian | null>(null)
   const [amount, setAmount] = useState<number>(20)
   const [note, setNote] = useState('Credito para consumo')
   const [message, setMessage] = useState<string | null>(null)
   const [fiadoMessage, setFiadoMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(Boolean(supabase))
+  const [loading, setLoading] = useState(false)
+  const [guardianLoading, setGuardianLoading] = useState(Boolean(supabase))
+  const [needsOnboarding, setNeedsOnboarding] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [createDraft, setCreateDraft] = useState<{ fullName: string; grade: string; period: 'morning' | 'afternoon'; observations: string }>({
     fullName: '',
@@ -37,17 +42,60 @@ const GuardianPortalPage = () => {
   })
   const [creating, setCreating] = useState(false)
 
-  const loadAssignments = async () => {
+  const loadGuardian = async () => {
+    setError(null)
+    setNeedsOnboarding(false)
+    if (env.configError || !supabase) {
+      setGuardian(null)
+      setAssignments([])
+      setSelectedStudentId(null)
+      setError('Supabase nao configurado')
+      setGuardianLoading(false)
+      return
+    }
+    if (!user?.id) {
+      setGuardian(null)
+      setGuardianLoading(false)
+      return
+    }
+    setGuardianLoading(true)
+    const { data, error: guardianError } = await supabase
+      .from('guardians')
+      .select('id, full_name, phone, cpf, address, terms_version, terms_accepted_at')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (guardianError) {
+      setError(`Falha ao carregar responsavel: ${guardianError.message}`)
+      setGuardian(null)
+      setGuardianLoading(false)
+      return
+    }
+    if (!data) {
+      setGuardian(null)
+      setAssignments([])
+      setSelectedStudentId(null)
+      setNeedsOnboarding(true)
+      setGuardianLoading(false)
+      return
+    }
+    setGuardian({
+      id: data.id,
+      fullName: data.full_name,
+      phone: data.phone,
+      cpf: data.cpf,
+      address: data.address,
+      termsAcceptedAt: data.terms_accepted_at ?? undefined,
+      termsVersion: data.terms_version ?? undefined,
+    })
+    setGuardianLoading(false)
+  }
+
+  const loadAssignments = async (guardianId: string) => {
     setError(null)
     if (env.configError || !supabase) {
       setAssignments([])
       setSelectedStudentId(null)
       setError('Supabase nao configurado')
-      setLoading(false)
-      return
-    }
-    if (!user?.id) {
-      setAssignments([])
       setLoading(false)
       return
     }
@@ -74,7 +122,7 @@ const GuardianPortalPage = () => {
             )
           `,
       )
-      .eq('guardian_id', user.id)
+      .eq('guardian_id', guardianId)
     if (queryError) {
       setError(queryError.message)
       setLoading(false)
@@ -114,14 +162,20 @@ const GuardianPortalPage = () => {
   }
 
   useEffect(() => {
-    void loadAssignments()
+    void loadGuardian()
   }, [role, user?.id])
 
   useEffect(() => {
-    if (!loading && assignments.length === 0) {
+    if (guardian?.id) {
+      void loadAssignments(guardian.id)
+    }
+  }, [guardian?.id])
+
+  useEffect(() => {
+    if (!loading && assignments.length === 0 && guardian && !needsOnboarding) {
       setCreateOpen(true)
     }
-  }, [assignments.length, loading])
+  }, [assignments.length, guardian, loading, needsOnboarding])
 
   const selected = useMemo(
     () => assignments.find((item) => item.student.id === selectedStudentId),
@@ -181,6 +235,9 @@ const GuardianPortalPage = () => {
       if (!supabase) {
         throw new Error('Supabase nao configurado')
       }
+      if (!guardian?.id) {
+        throw new Error('Cadastro do responsavel nao localizado. Complete o cadastro antes de adicionar alunos.')
+      }
       // Guardian creates a student tied to their own account.
       const { data, error: insertError } = await supabase
         .from('students')
@@ -188,7 +245,7 @@ const GuardianPortalPage = () => {
           full_name: createDraft.fullName,
           grade: createDraft.grade,
           period: createDraft.period,
-          guardian_id: user?.id,
+          guardian_id: guardian.id,
           status: 'active',
           pricing_model: 'prepaid',
           observations: createDraft.observations || null,
@@ -199,7 +256,7 @@ const GuardianPortalPage = () => {
       if (!data?.id) throw new Error('Aluno nao criado')
       setCreateDraft({ fullName: '', grade: '', period: 'morning', observations: '' })
       setCreateOpen(false)
-      await loadAssignments()
+      await loadAssignments(guardian.id)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -220,20 +277,37 @@ const GuardianPortalPage = () => {
     <div className="grid" style={{ gap: 16 }}>
       <section className="card">
         <div className="section-title">
-          <h3 style={{ margin: 0 }}>Portal do responsavel</h3>
+          <h3 style={{ margin: 0 }}>Painel do responsavel</h3>
           <span className="muted">Adicionar creditos ou acompanhar fiado autorizado</span>
         </div>
+        {guardianLoading && <div className="muted">Carregando cadastro do responsavel...</div>}
+        {!guardianLoading && needsOnboarding && (
+          <div className="card" style={{ background: 'rgba(255,255,255,0.03)' }}>
+            <div className="section-title">
+              <h3 style={{ margin: 0 }}>Cadastro pendente</h3>
+              <span className="muted">Precisamos confirmar seus dados para liberar o portal.</span>
+            </div>
+            <p className="muted">Complete o cadastro do responsavel para acessar os alunos e as carteiras.</p>
+            <button className="btn btn-primary" onClick={() => navigate('/painel-do-responsavel/cadastro')}>
+              Completar cadastro
+            </button>
+          </div>
+        )}
         {loading && <div className="muted">Carregando carteira...</div>}
         {error && <div className="pill danger">{error}</div>}
         <div className="chips" style={{ marginBottom: 8 }}>
-          <button className="btn" onClick={() => setCreateOpen(true)}>
+          <button
+            className="btn"
+            onClick={() => setCreateOpen(true)}
+            disabled={needsOnboarding || guardianLoading}
+          >
             Cadastrar aluno
           </button>
         </div>
-        {!loading && assignments.length === 0 && (
+        {!loading && !guardianLoading && !needsOnboarding && assignments.length === 0 && (
           <div className="muted">Nenhum aluno associado a esta conta.</div>
         )}
-        {!loading && assignments.length > 0 && (
+        {!loading && !guardianLoading && !needsOnboarding && assignments.length > 0 && (
           <div className="grid" style={{ gap: 12 }}>
             <div className="field">
               <label>Aluno</label>
@@ -360,7 +434,7 @@ const GuardianPortalPage = () => {
           </div>
         )}
 
-        {createOpen && (
+        {createOpen && guardian && !needsOnboarding && (
           <div className="card" style={{ marginTop: 12 }}>
             <div className="section-title">
               <h3 style={{ margin: 0 }}>Cadastrar aluno</h3>

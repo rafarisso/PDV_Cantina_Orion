@@ -18,7 +18,7 @@ const NAV_ITEMS: { path: string; label: string; roles: UserRole[]; icon: JSX.Ele
   { path: '/wallets', label: 'Carteiras', roles: ['admin'], icon: <Wallet size={16} /> },
   { path: '/students', label: 'Alunos', roles: ['admin'], icon: <Menu size={16} /> },
   { path: '/billing', label: 'Cobrancas Pix', roles: ['admin'], icon: <Menu size={16} /> },
-  { path: '/portal', label: 'Responsavel', roles: ['guardian'], icon: <PiggyBank size={16} /> },
+  { path: '/painel-do-responsavel', label: 'Responsavel', roles: ['guardian'], icon: <PiggyBank size={16} /> },
 ]
 
 const App = () => {
@@ -35,7 +35,10 @@ const App = () => {
     if (!user || !role) return
     if (availableNav.length === 0) return
     const allowed = availableNav.some((item) => item.path === location.pathname)
-    if (!allowed) {
+    const allowOnboarding =
+      role === 'guardian' &&
+      (location.pathname === '/painel-do-responsavel/cadastro' || location.pathname === '/guardian-onboarding')
+    if (!allowed && !allowOnboarding) {
       navigate(availableNav[0].path, { replace: true })
     }
   }, [availableNav, location.pathname, navigate, role, user])
@@ -56,7 +59,11 @@ const App = () => {
 
   if (loading) return <div className="app-shell">Carregando...</div>
   if (!user) {
-    if (location.pathname === '/guardian-onboarding') {
+    if (
+      location.pathname === '/guardian-onboarding' ||
+      location.pathname === '/painel-do-responsavel' ||
+      location.pathname === '/painel-do-responsavel/cadastro'
+    ) {
       return <GuardianOnboardingPage />
     }
     return <LoginPage />
@@ -142,13 +149,23 @@ const App = () => {
           }
         />
         <Route
-          path="/portal"
+          path="/painel-do-responsavel"
           element={
             <Protected roles={['guardian']}>
               <GuardianPortalPage />
             </Protected>
           }
         />
+        <Route
+          path="/painel-do-responsavel/cadastro"
+          element={
+            <Protected roles={['guardian']}>
+              <GuardianOnboardingPage />
+            </Protected>
+          }
+        />
+        <Route path="/portal" element={<Navigate to="/painel-do-responsavel" replace />} />
+        <Route path="/guardian-onboarding" element={<Navigate to="/painel-do-responsavel/cadastro" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
