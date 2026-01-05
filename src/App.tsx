@@ -21,7 +21,7 @@ const NAV_ITEMS: { path: string; label: string; roles: UserRole[]; icon: JSX.Ele
 ]
 
 const App = () => {
-  const { user, role, loading, signOut, isDemo, setRole, configError } = useAuth()
+  const { user, role, loading, signOut, isDemo, configError, authError } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -48,6 +48,7 @@ const App = () => {
             Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para executar em producao ou habilite o modo demo com
             VITE_DEMO=true.
           </p>
+          {authError && <div className="pill danger">{authError}</div>}
         </div>
       </div>
     )
@@ -74,18 +75,6 @@ const App = () => {
           </div>
         </div>
         <div className="chips">
-          {isDemo && (
-            <select
-              className="input"
-              value={role}
-              onChange={(e) => setRole(e.target.value as UserRole)}
-              style={{ width: 160 }}
-            >
-              <option value="admin">Admin</option>
-              <option value="operator">Operador</option>
-              <option value="guardian">Responsavel</option>
-            </select>
-          )}
           <button className="btn btn-ghost" onClick={() => signOut()}>
             <LogOut size={16} />
             Sair
@@ -171,8 +160,8 @@ const App = () => {
 }
 
 const Protected = ({ roles, children }: { roles: UserRole[]; children: JSX.Element }) => {
-  const { role } = useAuth()
-  if (!roles.includes(role)) {
+  const { role, user } = useAuth()
+  if (!user || !roles.includes(role)) {
     return (
       <div className="card">
         <div className="card-title">Acesso restrito</div>

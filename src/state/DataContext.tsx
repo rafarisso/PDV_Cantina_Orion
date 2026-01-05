@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { env } from '@/lib/env'
 import {
@@ -15,6 +15,7 @@ import {
   type Wallet,
 } from '@/types/domain'
 import { demoAlerts, demoGuardians, demoLedger, demoOrders, demoProducts, demoStudents, demoWallets } from '@/data/demoData'
+import { useAuth } from './AuthContext'
 
 interface DataContextValue {
   guardians: Guardian[]
@@ -57,14 +58,144 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 const uid = () => crypto.randomUUID()
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
+  const { user } = useAuth()
   const [guardians, setGuardians] = useState<Guardian[]>(env.isDemo ? demoGuardians : [])
   const [students, setStudents] = useState<Student[]>(env.isDemo ? demoStudents : [])
   const [wallets, setWallets] = useState<Wallet[]>(env.isDemo ? demoWallets : [])
-  const [products] = useState<Product[]>(env.isDemo ? demoProducts : [])
+  const [products, setProducts] = useState<Product[]>(env.isDemo ? demoProducts : [])
   const [orders, setOrders] = useState<Order[]>(env.isDemo ? demoOrders : [])
   const [alerts, setAlerts] = useState<Alert[]>(env.isDemo ? demoAlerts : [])
   const [ledger, setLedger] = useState<LedgerEntry[]>(env.isDemo ? demoLedger : [])
   const [pixCharges, setPixCharges] = useState<PixCharge[]>([])
+
+  useEffect(() => {
+    const load = async () => {
+      if (env.isDemo || !supabase || !user) return
+      try {
+        const [guardiansRes, studentsRes, walletsRes, productsRes, ordersRes, alertsRes] = await Promise.all([
+          supabase.from('guardians').select('*'),
+          supabase.from('students').select('*'),
+          supabase.from('wallets').select('*'),
+          supabase.from('products').select('*').order('created_at', { ascending: true }),
+          supabase
+            .from('orders')
+            .select(
+              `
+            id,
+            student_id,
+            total,
+            created_by,
+            created_at,
+            order_items (
+              product_id,
+              quantity,
+              unit_price
+            )
+          `,
+            )
+            .order('created_at', { ascending: false })
+            .limit(100),
+          supabase.from('alerts').select('*').order('created_at', { ascending: false }).limit(100),
+        ])
+
+        if (!guardiansRes.error && guardiansRes.data) {
+          setGuardians(
+            guardiansRes.data.map((row: any) => ({
+              id: row.id,
+              fullName: row.full_name,
+              phone: row.phone,
+              cpf: row.cpf,
+              address: row.address,
+              termsAcceptedAt: row.terms_accepted_at ?? undefined,
+              termsVersion: row.terms_version ?? undefined,
+            })),
+          )
+        }
+
+        if (!studentsRes.error && studentsRes.data) {
+          setStudents(
+            studentsRes.data.map((row: any) => ({
+              id: row.id,
+              guardianId: row.guardian_id,
+              fullName: row.full_name,
+              grade: row.grade,
+              period: row.period,
+              status: row.status,
+              pricingModel: row.pricing_model,
+            })),
+          )
+        }
+
+        if (!walletsRes.error && walletsRes.data) {
+          setWallets(
+            walletsRes.data.map((row: any) => ({
+              id: row.id,
+              studentId: row.student_id,
+              balance: Number(row.balance ?? 0),
+              creditLimit: Number(row.credit_limit ?? 0),
+              model: row.model,
+              allowNegativeOnceUsed: Boolean(row.allow_negative_once_used),
+              blocked: Boolean(row.blocked),
+              blockedReason: row.blocked_reason ?? undefined,
+              alertBaseline: row.alert_baseline ?? undefined,
+              lastAlertLevel: row.last_alert_level ?? undefined,
+            })),
+          )
+        }
+
+        if (!productsRes.error && productsRes.data) {
+          const mapped: Product[] = productsRes.data.map((row: any) => ({
+            id: row.id,
+            name: row.name,
+            price: Number(row.price),
+            category: row.category ?? undefined,
+            active: row.active,
+          }))
+          if (mapped.length) {
+            // only set if we actually got data; avoid clobbering demo data in dev
+            setProducts(mapped)
+          }
+        }
+
+        if (!ordersRes.error && ordersRes.data) {
+          setOrders(
+            ordersRes.data.map((row: any) => ({
+              id: row.id,
+              studentId: row.student_id,
+              total: Number(row.total ?? 0),
+              items: Array.isArray(row.order_items)
+                ? row.order_items.map((item: any) => ({
+                    productId: item.product_id,
+                    quantity: item.quantity,
+                    unitPrice: Number(item.unit_price),
+                  }))
+                : [],
+              createdAt: row.created_at,
+              createdBy: row.created_by,
+            })),
+          )
+        }
+
+        if (!alertsRes.error && alertsRes.data) {
+          setAlerts(
+            alertsRes.data.map((row: any) => ({
+              id: row.id,
+              studentId: row.student_id,
+              guardianId: row.guardian_id,
+              type: row.type,
+              level: Number(row.level),
+              message: row.message,
+              createdAt: row.created_at,
+              acknowledgedAt: row.acknowledged_at ?? undefined,
+            })),
+          )
+        }
+      } catch (err) {
+        console.warn('Falha ao carregar dados iniciais', err)
+      }
+    }
+    void load()
+  }, [user])
 
   const findWallet = (studentId: string) => wallets.find((w) => w.studentId === studentId)
 

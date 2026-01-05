@@ -9,9 +9,9 @@ interface AuthContextValue {
   loading: boolean
   isDemo: boolean
   configError: boolean
+  authError: string | null
   signIn: (email: string, password: string) => Promise<UserRole>
   signOut: () => Promise<void>
-  setRole: (role: UserRole) => void
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
@@ -27,10 +27,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<SessionUser | null>(env.isDemo ? DEMO_USER : null)
   const [role, setRoleState] = useState<UserRole>(env.isDemo ? 'admin' : 'operator')
   const [loading, setLoading] = useState(!env.isDemo)
+  const [authError, setAuthError] = useState<string | null>(null)
 
   const loadRole = async (userId: string): Promise<UserRole> => {
-    if (!supabase) throw new Error('Supabase nao configurado')
-    const { data, error } = await supabase.from('user_roles').select('role').eq('user_id', userId).maybeSingle()
+    const client = supabase
+    if (!client) throw new Error('Supabase nao configurado')
+    const { data, error } = await client.from('user_roles').select('role').eq('user_id', userId).maybeSingle()
     if (error) {
       console.warn('Falha ao carregar papel do usuario', error.message)
       throw error
@@ -48,12 +50,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       return
     }
 
-    if (!supabase) {
+    const client = supabase
+    if (!client) {
       setLoading(false)
       return
     }
 
-    supabase.auth
+    client.auth
       .getSession()
       .then(({ data }) => {
         const sessionUser = data.session?.user
@@ -67,15 +70,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                 role: userRole,
                 fullName: sessionUser.user_metadata?.full_name,
               })
+              setAuthError(null)
             })
-            .catch(() => {
-              setUser(null)
+            .catch((err) => {
+              console.warn('Falha ao carregar papel', err)
+              setAuthError('Falha ao validar papel do usuario')
+              void client.auth.signOut()
+              setUser(env.isDemo ? DEMO_USER : null)
             })
         }
       })
       .finally(() => setLoading(false))
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_, session) => {
+    const { data: listener } = client.auth.onAuthStateChange((_, session) => {
       if (session?.user) {
         loadRole(session.user.id)
           .then((userRole) => {
@@ -86,9 +93,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
               role: userRole,
               fullName: session.user.user_metadata?.full_name,
             })
+            setAuthError(null)
           })
-          .catch(() => {
-            setUser(null)
+          .catch((err) => {
+            console.warn('Falha ao carregar papel', err)
+            setAuthError('Falha ao validar papel do usuario')
+            setUser(env.isDemo ? DEMO_USER : null)
           })
       } else {
         setUser(env.isDemo ? DEMO_USER : null)
@@ -105,6 +115,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     if (env.isDemo && !supabase) {
       setUser(DEMO_USER)
       setRoleState('admin')
+      setAuthError(null)
       return 'admin'
     }
     if (!supabase) {
@@ -122,6 +133,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       role: resolvedRole,
       fullName: sessionUser.user_metadata?.full_name,
     })
+    setAuthError(null)
     return resolvedRole
   }
 
@@ -130,14 +142,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       await supabase.auth.signOut()
     }
     setUser(env.isDemo ? DEMO_USER : null)
-    if (!env.isDemo) {
-      setRoleState('operator')
-    }
-  }
-
-  const setRole = (nextRole: UserRole) => {
-    if (!env.isDemo) return
-    setRoleState(nextRole)
+    setAuthError(null)
   }
 
   const value = useMemo<AuthContextValue>(
@@ -147,11 +152,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       loading,
       isDemo: env.isDemo,
       configError: env.configError,
+      authError,
       signIn,
       signOut,
-      setRole,
     }),
-    [loading, role, user],
+    [authError, loading, role, user],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

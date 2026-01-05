@@ -36,6 +36,7 @@ export interface Student {
   period: StudyPeriod
   status: StudentStatus
   pricingModel: PricingModel
+  observations?: string
 }
 
 export interface Wallet {

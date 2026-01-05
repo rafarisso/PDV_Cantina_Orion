@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/state/AuthContext'
 
 const LoginPage = () => {
-  const { signIn, isDemo, setRole, configError } = useAuth()
+  const { signIn, isDemo, configError } = useAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -47,9 +47,7 @@ const LoginPage = () => {
       </div>
       <div className="card">
         <div className="card-title">Acesso seguro</div>
-        <p className="muted">
-          Use credenciais do Supabase Auth. No modo demo voce pode entrar sem email para explorar o fluxo.
-        </p>
+        <p className="muted">Use credenciais do Supabase Auth. Este acesso valida seu papel antes de entrar.</p>
         <form onSubmit={handleLogin} className="grid" style={{ marginTop: 14, gap: 12 }}>
           <div className="field">
             <label>Email institucional</label>
@@ -78,33 +76,7 @@ const LoginPage = () => {
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
         </form>
-        {isDemo && (
-          <>
-            <div className="divider" />
-            <div className="chips">
-              <button
-                className="btn"
-                onClick={async () => {
-                  setRole('admin')
-                  const nextRole = await signIn('', '')
-                  navigate(nextRole === 'operator' ? '/pdv' : '/', { replace: true })
-                }}
-              >
-                Entrar como admin (demo)
-              </button>
-              <button
-                className="btn"
-                onClick={async () => {
-                  setRole('operator')
-                  await signIn('', '')
-                  navigate('/pdv', { replace: true })
-                }}
-              >
-                Entrar como operador (demo)
-              </button>
-            </div>
-          </>
-        )}
+        {isDemo && <div className="muted">Modo demo ativo apenas por configuracao explicita (VITE_DEMO=true).</div>}
       </div>
     </div>
   )
