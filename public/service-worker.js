@@ -1,10 +1,10 @@
-const CACHE_NAME = 'orion-cache-v1'
-const ASSETS = ['/', '/index.html', '/manifest.webmanifest', '/offline.html']
+const CACHE_NAME = 'orion-cache-v2'
+const OFFLINE_URL = '/offline.html'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS)
+      return cache.addAll([OFFLINE_URL])
     }),
   )
   self.skipWaiting()
@@ -25,16 +25,14 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached
-      return fetch(event.request)
-        .then((response) => {
-          const copy = response.clone()
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy))
-          return response
-        })
-        .catch(() => caches.match('/offline.html'))
-    }),
-  )
+
+  // Only handle navigation requests to avoid caching hashed module assets with stale HTML
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(async () => {
+        const cached = await caches.match(OFFLINE_URL)
+        return cached ?? Response.error()
+      }),
+    )
+  }
 })
