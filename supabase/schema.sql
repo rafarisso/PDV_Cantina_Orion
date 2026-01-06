@@ -493,3 +493,181 @@ from public.orders o
 join public.students s on s.id = o.student_id
 where o.created_at >= now() - interval '7 days'
 group by 1,2,3;
+alter view public.weekly_consumption set (security_invoker = true);
+grant select on public.weekly_consumption to authenticated;
+
+-- Vincula responsavel existente ao usuario autenticado via CPF
+create or replace function public.claim_guardian_by_cpf(p_cpf text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_claimed_id uuid;
+  v_meta_cpf text;
+  v_clean_cpf text;
+begin
+  if auth.uid() is null then
+    raise exception using message = 'Nao autenticado', errcode = 'P0001';
+  end if;
+  if not has_role('guardian') then
+    raise exception using message = 'Nao autorizado', errcode = 'P0004';
+  end if;
+  v_clean_cpf := regexp_replace(coalesce(p_cpf, ''), '\D', '', 'g');
+  if v_clean_cpf = '' then
+    raise exception using message = 'CPF obrigatorio', errcode = 'P0002';
+  end if;
+  v_meta_cpf := (auth.jwt() -> 'user_metadata' ->> 'cpf');
+  if v_meta_cpf is not null and v_meta_cpf <> '' then
+    if regexp_replace(v_meta_cpf, '\D', '', 'g') <> v_clean_cpf then
+      raise exception using message = 'CPF divergente', errcode = 'P0003';
+    end if;
+  end if;
+
+  update public.guardians
+  set user_id = auth.uid(),
+      updated_at = now()
+  where user_id is null
+    and cpf = v_clean_cpf
+  returning id into v_claimed_id;
+
+  return v_claimed_id;
+end;
+$$;
+grant execute on function public.claim_guardian_by_cpf(text) to authenticated;
+
+-- Cria ou atualiza cobranca Pix e aplica credito quando pago
+create or replace function public.create_topup_charge(
+  p_guardian_id uuid,
+  p_student_id uuid default null,
+  p_amount numeric,
+  p_status public.pix_status default 'created'::public.pix_status,
+  p_br_code text default null,
+  p_txid text default null,
+  p_description text default null,
+  p_expires_at timestamptz default null
+)
+returns public.pix_charges
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_txid text;
+  v_prev_status public.pix_status;
+  v_charge public.pix_charges%rowtype;
+  v_wallet public.wallets%rowtype;
+  v_new_balance numeric(12,2);
+  v_ledger_id uuid;
+begin
+  if p_guardian_id is null then
+    raise exception using message = 'guardian_id obrigatorio', errcode = 'P0001';
+  end if;
+  if p_amount is null or p_amount <= 0 then
+    raise exception using message = 'valor invalido', errcode = 'P0002';
+  end if;
+  if auth.uid() is not null then
+    if has_role('guardian') then
+      if not exists (select 1 from public.guardians where id = p_guardian_id and user_id = auth.uid()) then
+        raise exception using message = 'Nao autorizado', errcode = 'P0003';
+      end if;
+    elsif not has_role('admin') then
+      raise exception using message = 'Nao autorizado', errcode = 'P0003';
+    end if;
+  end if;
+
+  v_txid := coalesce(p_txid, gen_random_uuid()::text);
+
+  select status into v_prev_status
+  from public.pix_charges
+  where txid = v_txid;
+
+  insert into public.pix_charges (guardian_id, student_id, txid, amount, status, br_code, description, expires_at)
+  values (p_guardian_id, p_student_id, v_txid, p_amount, coalesce(p_status, 'created'::public.pix_status), p_br_code, p_description, p_expires_at)
+  on conflict (txid) do update
+    set status = excluded.status,
+        amount = excluded.amount,
+        br_code = coalesce(excluded.br_code, public.pix_charges.br_code),
+        description = coalesce(excluded.description, public.pix_charges.description),
+        expires_at = coalesce(excluded.expires_at, public.pix_charges.expires_at)
+  returning * into v_charge;
+
+  if v_charge.status = 'paid' and v_charge.student_id is not null and v_prev_status is distinct from 'paid' then
+    select * into v_wallet from public.wallets where student_id = v_charge.student_id for update;
+    if found then
+      if v_wallet.model = 'prepaid' then
+        v_new_balance := v_wallet.balance + p_amount;
+        insert into public.ledger (wallet_id, kind, amount, balance_after, description, created_by)
+        values (v_wallet.id, 'payment', p_amount, v_new_balance, coalesce(p_description, 'Credito Pix'), auth.uid())
+        returning id into v_ledger_id;
+      else
+        v_new_balance := greatest(v_wallet.balance - p_amount, 0);
+        insert into public.ledger (wallet_id, kind, amount, balance_after, description, created_by)
+        values (v_wallet.id, 'payment', -p_amount, v_new_balance, coalesce(p_description, 'Pagamento Pix'), auth.uid())
+        returning id into v_ledger_id;
+      end if;
+
+      update public.wallets
+      set balance = v_new_balance,
+          blocked = case
+            when v_wallet.model = 'prepaid' then v_new_balance < 0
+            else v_new_balance > v_wallet.credit_limit
+          end,
+          blocked_reason = case
+            when v_wallet.model = 'prepaid' and v_new_balance < 0 then 'Saldo negativo'
+            when v_wallet.model = 'postpaid' and v_new_balance > v_wallet.credit_limit then 'Limite excedido'
+            else null
+          end,
+          updated_at = now()
+      where id = v_wallet.id;
+
+      if v_ledger_id is not null then
+        update public.pix_charges
+        set ledger_id = v_ledger_id
+        where id = v_charge.id;
+      end if;
+    end if;
+  end if;
+
+  return v_charge;
+end;
+$$;
+grant execute on function public.create_topup_charge(
+  uuid, uuid, numeric, public.pix_status, text, text, text, timestamptz
+) to authenticated;
+
+-- Visao de vendas do dia (admin)
+create or replace view public.admin_sales_today as
+select sum(o.total) as total
+from public.orders o
+where o.created_at >= date_trunc('day', now());
+alter view public.admin_sales_today set (security_invoker = true);
+grant select on public.admin_sales_today to authenticated;
+
+-- Visao de janela de 20min (admin)
+create or replace view public.admin_sales_today_20min as
+select date_trunc('minute', o.created_at)
+         - make_interval(mins => (extract(minute from o.created_at)::int % 20)) as window_start,
+       (date_trunc('minute', o.created_at)
+         - make_interval(mins => (extract(minute from o.created_at)::int % 20))) + interval '20 minutes' as window_end,
+       sum(o.total) as total
+from public.orders o
+where o.created_at >= date_trunc('day', now())
+group by 1,2;
+alter view public.admin_sales_today_20min set (security_invoker = true);
+grant select on public.admin_sales_today_20min to authenticated;
+
+-- Melhor cliente do dia (admin)
+create or replace view public.admin_best_client_today as
+select s.id as student_id,
+       s.full_name,
+       s.grade,
+       s.period,
+       sum(o.total) as total_spent
+from public.orders o
+join public.students s on s.id = o.student_id
+where o.created_at >= date_trunc('day', now())
+group by 1,2,3,4;
+alter view public.admin_best_client_today set (security_invoker = true);
+grant select on public.admin_best_client_today to authenticated;

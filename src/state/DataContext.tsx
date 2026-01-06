@@ -26,8 +26,8 @@ interface DataContextValue {
   alerts: Alert[]
   ledger: LedgerEntry[]
   pixCharges: PixCharge[]
-  registerGuardian: (data: Guardian) => void
-  registerStudent: (data: Student, options: { creditLimit?: number; alertBaseline?: number }) => void
+  registerGuardian: (data: Guardian) => Promise<Guardian>
+  registerStudent: (data: Student, options: { creditLimit?: number; alertBaseline?: number }) => Promise<Student>
   recordPurchase: (params: {
     studentId: string
     items: CartItem[]
@@ -56,6 +56,8 @@ const DataContext = createContext<DataContextValue | undefined>(undefined)
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 const uid = () => crypto.randomUUID()
+const digitsOnly = (value?: string) => (value ?? '').replace(/\D/g, '')
+const trimValue = (value?: string) => (value ?? '').trim()
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
   const { user, role } = useAuth()
@@ -452,35 +454,149 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     return { order, wallet: nextWallet, triggeredAlerts }
   }
 
-  const registerGuardian = (data: Guardian) => {
+  const registerGuardian = async (data: Guardian) => {
     if (role !== 'admin') {
       throw new Error('Apenas administradores podem cadastrar responsaveis')
     }
     if (!data.fullName || !data.phone || !data.cpf) {
       throw new Error('Dados do responsavel sao obrigatorios')
     }
-    setGuardians((prev) => [...prev, clone(data)])
+    if (!supabase || env.isDemo) {
+      const localGuardian = clone(data)
+      setGuardians((prev) => [...prev, localGuardian])
+      return localGuardian
+    }
+    const address = {
+      street: trimValue(data.address.street),
+      number: trimValue(data.address.number),
+      complement: trimValue(data.address.complement),
+      neighborhood: trimValue(data.address.neighborhood),
+      city: trimValue(data.address.city),
+      state: trimValue(data.address.state),
+      zipCode: digitsOnly(data.address.zipCode),
+    }
+    const normalizedCpf = digitsOnly(data.cpf)
+    const normalizedPhone = digitsOnly(data.phone)
+    const normalizedZip = digitsOnly(address.zipCode)
+    const termsAcceptedAt = data.termsAcceptedAt ?? new Date().toISOString()
+    const payload = {
+      id: data.id,
+      user_id: data.userId ?? null,
+      full_name: trimValue(data.fullName),
+      phone: normalizedPhone,
+      cpf: normalizedCpf,
+      address,
+      cep: normalizedZip || null,
+      street: trimValue(address.street) || null,
+      number: trimValue(address.number) || null,
+      complement: trimValue(address.complement) || null,
+      neighborhood: trimValue(address.neighborhood) || null,
+      city: trimValue(address.city) || null,
+      state: trimValue(address.state) || null,
+      accepted_terms: true,
+      accepted_at: termsAcceptedAt,
+      terms_version: data.termsVersion ?? '2025-01',
+      terms_accepted_at: termsAcceptedAt,
+    }
+    const { data: inserted, error } = await supabase.from('guardians').insert(payload).select('*').maybeSingle()
+    if (error) throw error
+    const guardianRow = inserted ?? payload
+    const nextGuardian: Guardian = {
+      id: guardianRow.id,
+      userId: guardianRow.user_id ?? undefined,
+      fullName: guardianRow.full_name,
+      phone: guardianRow.phone,
+      cpf: guardianRow.cpf,
+      address: guardianRow.address,
+      termsAcceptedAt: guardianRow.terms_accepted_at ?? undefined,
+      termsVersion: guardianRow.terms_version ?? undefined,
+    }
+    setGuardians((prev) => [...prev, nextGuardian])
+    return nextGuardian
   }
 
-  const registerStudent = (data: Student, options: { creditLimit?: number; alertBaseline?: number }) => {
+  const registerStudent = async (data: Student, options: { creditLimit?: number; alertBaseline?: number }) => {
     if (role !== 'admin') {
       throw new Error('Apenas administradores podem cadastrar alunos')
     }
     if (!data.fullName || !data.guardianId || !data.grade || !data.period) {
       throw new Error('Dados do aluno incompletos')
     }
-    setStudents((prev) => [...prev, clone(data)])
-    const wallet: Wallet = {
-      id: uid(),
-      studentId: data.id,
-      balance: data.pricingModel === 'prepaid' ? 0 : 0,
-      creditLimit: options.creditLimit ?? 0,
-      model: data.pricingModel,
-      allowNegativeOnceUsed: false,
-      blocked: false,
-      alertBaseline: options.alertBaseline ?? (data.pricingModel === 'prepaid' ? options.creditLimit ?? 50 : options.creditLimit),
+    if (!supabase || env.isDemo) {
+      const localStudent = clone(data)
+      setStudents((prev) => [...prev, localStudent])
+      const wallet: Wallet = {
+        id: uid(),
+        studentId: data.id,
+        balance: 0,
+        creditLimit: options.creditLimit ?? 0,
+        model: data.pricingModel,
+        allowNegativeOnceUsed: false,
+        blocked: false,
+        alertBaseline:
+          options.alertBaseline ??
+          (data.pricingModel === 'prepaid' ? options.creditLimit ?? 50 : options.creditLimit),
+      }
+      setWallets((prev) => [...prev, wallet])
+      return localStudent
     }
-    setWallets((prev) => [...prev, wallet])
+    const payload = {
+      id: data.id,
+      guardian_id: data.guardianId,
+      full_name: trimValue(data.fullName),
+      grade: trimValue(data.grade),
+      period: data.period,
+      observations: trimValue(data.observations) || null,
+      status: data.status,
+      pricing_model: data.pricingModel,
+    }
+    const { data: inserted, error } = await supabase.from('students').insert(payload).select('*').maybeSingle()
+    if (error) throw error
+    const studentRow = inserted ?? payload
+    const walletUpdate: Record<string, any> = {}
+    if (data.pricingModel === 'postpaid') {
+      walletUpdate.credit_limit = options.creditLimit ?? 0
+      walletUpdate.alert_baseline = options.alertBaseline ?? options.creditLimit ?? 0
+    } else {
+      walletUpdate.alert_baseline = options.alertBaseline ?? options.creditLimit ?? 50
+    }
+    const { data: walletRow, error: walletError } = await supabase
+      .from('wallets')
+      .update(walletUpdate)
+      .eq('student_id', studentRow.id)
+      .select('*')
+      .maybeSingle()
+    if (walletError) throw walletError
+    const nextStudent: Student = {
+      id: studentRow.id,
+      guardianId: studentRow.guardian_id,
+      fullName: studentRow.full_name,
+      grade: studentRow.grade,
+      period: studentRow.period,
+      status: studentRow.status,
+      pricingModel: studentRow.pricing_model,
+      observations: studentRow.observations ?? undefined,
+      photoUrl: studentRow.photo_url ?? undefined,
+    }
+    setStudents((prev) => [...prev, nextStudent])
+    if (walletRow) {
+      setWallets((prev) => [
+        ...prev,
+        {
+          id: walletRow.id,
+          studentId: walletRow.student_id,
+          balance: Number(walletRow.balance ?? 0),
+          creditLimit: Number(walletRow.credit_limit ?? 0),
+          model: walletRow.model,
+          allowNegativeOnceUsed: Boolean(walletRow.allow_negative_once_used),
+          blocked: Boolean(walletRow.blocked),
+          blockedReason: walletRow.blocked_reason ?? undefined,
+          alertBaseline: walletRow.alert_baseline ?? undefined,
+          lastAlertLevel: walletRow.last_alert_level ?? undefined,
+        },
+      ])
+    }
+    return nextStudent
   }
 
   const adjustWallet = ({

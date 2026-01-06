@@ -20,6 +20,7 @@ export interface Address {
 
 export interface Guardian {
   id: string
+  userId?: string
   fullName: string
   phone: string
   cpf: string

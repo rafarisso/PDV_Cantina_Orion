@@ -47,6 +47,7 @@ const StudentsPage = () => {
   })
   const [feedback, setFeedback] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   const studentsWithWallet = useMemo(
     () =>
@@ -76,10 +77,11 @@ const StudentsPage = () => {
     })
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
     setFeedback(null)
+    setSaving(true)
 
     try {
       const guardianData = guardianSchema.parse(guardianForm)
@@ -90,7 +92,7 @@ const StudentsPage = () => {
 
       const guardianId = crypto.randomUUID()
       const studentId = crypto.randomUUID()
-      registerGuardian({
+      await registerGuardian({
         id: guardianId,
         fullName: guardianData.fullName,
         phone: guardianData.phone,
@@ -99,7 +101,7 @@ const StudentsPage = () => {
         termsAcceptedAt: new Date().toISOString(),
         termsVersion: '2025-01',
       })
-      registerStudent(
+      await registerStudent(
         {
           id: studentId,
           guardianId,
@@ -118,6 +120,8 @@ const StudentsPage = () => {
       resetForms()
     } catch (err) {
       setError((err as Error).message)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -295,8 +299,8 @@ const StudentsPage = () => {
           </label>
           {error && <div className="pill danger">{error}</div>}
           {feedback && <div className="pill positive">{feedback}</div>}
-          <button className="btn btn-primary" type="submit">
-            Salvar cadastro
+          <button className="btn btn-primary" type="submit" disabled={saving}>
+            {saving ? 'Salvando...' : 'Salvar cadastro'}
           </button>
         </form>
       </section>

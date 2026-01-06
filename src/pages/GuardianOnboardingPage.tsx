@@ -14,6 +14,13 @@ import {
 
 const TERMS_VERSION = '2025-01'
 
+type PendingStudent = {
+  fullName: string
+  grade: string
+  period: 'morning' | 'afternoon'
+  observations: string
+}
+
 const GuardianOnboardingPage = () => {
   const { user, role } = useAuth()
   const navigate = useNavigate()
@@ -22,6 +29,9 @@ const GuardianOnboardingPage = () => {
   const [error, setError] = useState<string | null>(null)
   const [guardianId, setGuardianId] = useState<string | null>(null)
   const [studentCount, setStudentCount] = useState(0)
+  const [pendingStudents, setPendingStudents] = useState<PendingStudent[]>([])
+  const [importingStudents, setImportingStudents] = useState(false)
+  const [importMessage, setImportMessage] = useState<string | null>(null)
   const [existingAcceptedAt, setExistingAcceptedAt] = useState<string | null>(null)
   const [existingAcceptedIp, setExistingAcceptedIp] = useState<string | null>(null)
   const [lastCepLookup, setLastCepLookup] = useState<string | null>(null)
@@ -102,14 +112,31 @@ const GuardianOnboardingPage = () => {
       terms: Boolean(guardian?.accepted_terms ?? metadata.accepted_terms ?? false),
     })
 
+    const pendingFromMeta = Array.isArray(metadata.students) ? metadata.students : []
+    const normalizedPending = pendingFromMeta
+      .map((student: any) => ({
+        fullName: String(student?.fullName ?? student?.full_name ?? '').trim(),
+        grade: String(student?.grade ?? '').trim(),
+        period: student?.period === 'afternoon' ? 'afternoon' : 'morning',
+        observations: String(student?.observations ?? '').trim(),
+      }))
+      .filter((student) => student.fullName && student.grade)
+
+    let nextStudentCount = 0
     if (guardian?.id) {
       const { count } = await supabase
         .from('students')
         .select('id', { count: 'exact', head: true })
         .eq('guardian_id', guardian.id)
-      setStudentCount(count ?? 0)
+      nextStudentCount = count ?? 0
+      setStudentCount(nextStudentCount)
     } else {
       setStudentCount(0)
+    }
+    if (guardian?.id) {
+      setPendingStudents(nextStudentCount === 0 ? normalizedPending : [])
+    } else {
+      setPendingStudents(normalizedPending)
     }
     setChecking(false)
   }
@@ -156,6 +183,37 @@ const GuardianOnboardingPage = () => {
     guardianForm.terms &&
     isValidCpf(guardianForm.cpf)
 
+  const importPending = async (targetGuardianId: string, studentsToCreate: PendingStudent[]) => {
+    if (!supabase) {
+      setError('Supabase nao configurado.')
+      return
+    }
+    if (!studentsToCreate.length) return
+    setImportingStudents(true)
+    setImportMessage(null)
+    try {
+      for (const student of studentsToCreate) {
+        const { error: insertError } = await supabase.from('students').insert({
+          guardian_id: targetGuardianId,
+          full_name: student.fullName,
+          grade: student.grade,
+          period: student.period,
+          status: 'active',
+          pricing_model: 'prepaid',
+          observations: student.observations || null,
+        })
+        if (insertError) throw insertError
+      }
+      setPendingStudents([])
+      setStudentCount((prev) => prev + studentsToCreate.length)
+      setImportMessage('Alunos cadastrados a partir do cadastro inicial.')
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setImportingStudents(false)
+    }
+  }
+
   const handleSaveGuardian = async (event: React.FormEvent) => {
     event.preventDefault()
     setError(null)
@@ -169,6 +227,7 @@ const GuardianOnboardingPage = () => {
     }
     setLoading(true)
     try {
+      setImportMessage(null)
       const acceptedAt = existingAcceptedAt ?? new Date().toISOString()
       const acceptedIp = existingAcceptedIp ?? (await fetchPublicIp())
       const address = {
@@ -199,13 +258,36 @@ const GuardianOnboardingPage = () => {
         terms_version: TERMS_VERSION,
         terms_accepted_at: acceptedAt,
       }
+      let nextGuardianId = guardianId
       if (guardianId) {
         const { error: updateError } = await supabase.from('guardians').update(payload).eq('id', guardianId)
         if (updateError) throw updateError
       } else {
         const { data, error: insertError } = await supabase.from('guardians').insert(payload).select('id').maybeSingle()
-        if (insertError) throw insertError
-        setGuardianId(data?.id ?? null)
+        if (insertError) {
+          const errorCode = (insertError as { code?: string }).code
+          if (errorCode === '23505') {
+            const { data: claimedId, error: claimError } = await supabase.rpc('claim_guardian_by_cpf', {
+              p_cpf: onlyDigits(guardianForm.cpf),
+            })
+            if (claimError || !claimedId) {
+              throw new Error('CPF ja cadastrado. Solicite ao administrador a vinculacao da conta.')
+            }
+            const { error: updateError } = await supabase.from('guardians').update(payload).eq('id', claimedId)
+            if (updateError) throw updateError
+            setGuardianId(claimedId)
+            nextGuardianId = claimedId
+          } else {
+            throw insertError
+          }
+        } else {
+          setGuardianId(data?.id ?? null)
+          nextGuardianId = data?.id ?? null
+        }
+      }
+      const studentsToImport = pendingStudents
+      if (nextGuardianId && studentsToImport.length > 0 && studentCount === 0) {
+        await importPending(nextGuardianId, studentsToImport)
       }
       await loadGuardian()
     } catch (err) {
@@ -224,10 +306,6 @@ const GuardianOnboardingPage = () => {
     }
     if (!studentForm.fullName || !studentForm.grade) {
       setError('Informe nome e serie do aluno.')
-      return
-    }
-    if (!studentForm.photo) {
-      setError('Envie a foto do aluno.')
       return
     }
     setSavingStudent(true)
@@ -418,6 +496,8 @@ const GuardianOnboardingPage = () => {
               <h3 style={{ margin: 0 }}>Etapa 2 - Cadastro do aluno</h3>
               <span className="muted">Cadastre o primeiro aluno para liberar o painel.</span>
             </div>
+            {importingStudents && <div className="muted">Cadastrando alunos informados...</div>}
+            {importMessage && <div className="pill positive">{importMessage}</div>}
             {studentCount > 0 ? (
               <div className="card" style={{ background: 'rgba(255,255,255,0.03)' }}>
                 <p className="muted">Cadastro concluido. Voce ja possui aluno cadastrado.</p>
@@ -457,7 +537,7 @@ const GuardianOnboardingPage = () => {
                   </select>
                 </div>
                 <div className="field">
-                  <label>Foto do aluno</label>
+                  <label>Foto do aluno (opcional)</label>
                   <input
                     className="input"
                     type="file"

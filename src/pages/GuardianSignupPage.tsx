@@ -14,6 +14,22 @@ import {
 
 const TERMS_VERSION = '2025-01'
 
+type SignupStudent = {
+  id: string
+  fullName: string
+  grade: string
+  period: 'morning' | 'afternoon'
+  observations: string
+}
+
+const createStudentDraft = (): SignupStudent => ({
+  id: crypto.randomUUID(),
+  fullName: '',
+  grade: '',
+  period: 'morning',
+  observations: '',
+})
+
 const GuardianSignupPage = () => {
   const navigate = useNavigate()
   const [form, setForm] = useState({
@@ -31,6 +47,7 @@ const GuardianSignupPage = () => {
     state: '',
     terms: false,
   })
+  const [students, setStudents] = useState<SignupStudent[]>([createStudentDraft()])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -59,6 +76,18 @@ const GuardianSignupPage = () => {
       })
       .catch(() => setCepFeedback('Falha ao consultar o CEP.'))
   }, [form.cep, lastCepLookup])
+
+  const updateStudent = (id: string, patch: Partial<SignupStudent>) => {
+    setStudents((prev) => prev.map((student) => (student.id === id ? { ...student, ...patch } : student)))
+  }
+
+  const addStudent = () => {
+    setStudents((prev) => [...prev, createStudentDraft()])
+  }
+
+  const removeStudent = (id: string) => {
+    setStudents((prev) => (prev.length > 1 ? prev.filter((student) => student.id !== id) : prev))
+  }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -98,6 +127,23 @@ const GuardianSignupPage = () => {
       return
     }
 
+    const normalizedStudents = students
+      .map((student) => ({
+        fullName: student.fullName.trim(),
+        grade: student.grade.trim(),
+        period: student.period,
+        observations: student.observations.trim(),
+      }))
+      .filter((student) => student.fullName || student.grade || student.observations)
+    if (normalizedStudents.length === 0) {
+      setError('Informe pelo menos um aluno.')
+      return
+    }
+    if (normalizedStudents.some((student) => !student.fullName || !student.grade)) {
+      setError('Preencha nome e serie para cada aluno.')
+      return
+    }
+
     setLoading(true)
     try {
       const acceptedIp = await fetchPublicIp()
@@ -132,6 +178,7 @@ const GuardianSignupPage = () => {
             accepted_ip: acceptedIp ?? undefined,
             terms_version: TERMS_VERSION,
             address,
+            students: normalizedStudents,
           },
           emailRedirectTo: redirectTo,
         },
@@ -140,7 +187,76 @@ const GuardianSignupPage = () => {
       if (!data.user) {
         throw new Error('Nao foi possivel criar a conta.')
       }
-      setSuccess('Conta criada. Verifique seu email para confirmar o cadastro.')
+
+      if (data.session) {
+        const payload = {
+          user_id: data.user.id,
+          full_name: form.fullName.trim(),
+          cpf: onlyDigits(form.cpf),
+          phone: phoneDigits,
+          cep: onlyDigits(form.cep),
+          street: form.street,
+          number: form.number,
+          complement: form.complement || null,
+          neighborhood: form.neighborhood,
+          city: form.city,
+          state: form.state,
+          address,
+          accepted_terms: true,
+          accepted_at: new Date().toISOString(),
+          accepted_ip: acceptedIp ?? null,
+          terms_version: TERMS_VERSION,
+          terms_accepted_at: new Date().toISOString(),
+        }
+
+        let guardianId: string | null = null
+        const { data: guardian, error: guardianError } = await supabase
+          .from('guardians')
+          .insert(payload)
+          .select('id')
+          .maybeSingle()
+        if (guardianError) {
+          const errorCode = (guardianError as { code?: string }).code
+          if (errorCode === '23505') {
+            const { data: claimedId, error: claimError } = await supabase.rpc('claim_guardian_by_cpf', {
+              p_cpf: onlyDigits(form.cpf),
+            })
+            if (claimError || !claimedId) {
+              throw new Error('CPF ja cadastrado. Solicite a vinculacao do administrador.')
+            }
+            const { error: updateError } = await supabase.from('guardians').update(payload).eq('id', claimedId)
+            if (updateError) throw updateError
+            guardianId = claimedId
+          } else {
+            throw guardianError
+          }
+        } else {
+          guardianId = guardian?.id ?? null
+        }
+
+        if (!guardianId) {
+          throw new Error('Cadastro do responsavel nao localizado.')
+        }
+
+        for (const student of normalizedStudents) {
+          const { error: insertError } = await supabase.from('students').insert({
+            guardian_id: guardianId,
+            full_name: student.fullName,
+            grade: student.grade,
+            period: student.period,
+            status: 'active',
+            pricing_model: 'prepaid',
+            observations: student.observations || null,
+          })
+          if (insertError) throw insertError
+        }
+
+        setSuccess('Conta criada e alunos cadastrados. Voce ja pode acessar o portal.')
+      } else {
+        setSuccess(
+          'Conta criada. Verifique seu email para confirmar o cadastro. Os alunos informados serao cadastrados no primeiro acesso.',
+        )
+      }
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -298,6 +414,78 @@ const GuardianSignupPage = () => {
               Li e aceito os Termos de Uso e a Politica de Privacidade, conforme a LGPD, e autorizo o uso dos meus
               dados para fins de controle de consumo escolar e cobranca.
             </label>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div className="section-title">
+                <h4 style={{ margin: 0 }}>Alunos vinculados</h4>
+                <span className="muted">Cadastre ao menos um aluno nesta etapa.</span>
+              </div>
+              <div className="grid" style={{ gap: 12 }}>
+                {students.map((student, index) => (
+                  <div key={student.id} className="card" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                    <div className="section-title">
+                      <h4 style={{ margin: 0 }}>Aluno {index + 1}</h4>
+                      <span className="muted">Nome, serie e periodo</span>
+                    </div>
+                    <div className="grid grid-cols-2" style={{ gap: 12 }}>
+                      <div className="field">
+                        <label>Nome completo</label>
+                        <input
+                          className="input"
+                          required
+                          value={student.fullName}
+                          onChange={(event) => updateStudent(student.id, { fullName: event.target.value })}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Serie</label>
+                        <input
+                          className="input"
+                          required
+                          value={student.grade}
+                          onChange={(event) => updateStudent(student.id, { grade: event.target.value })}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Periodo</label>
+                        <select
+                          className="input"
+                          value={student.period}
+                          onChange={(event) =>
+                            updateStudent(student.id, { period: event.target.value as 'morning' | 'afternoon' })
+                          }
+                        >
+                          <option value="morning">Manha</option>
+                          <option value="afternoon">Tarde</option>
+                        </select>
+                      </div>
+                      <div className="field">
+                        <label>Observacoes</label>
+                        <input
+                          className="input"
+                          value={student.observations}
+                          onChange={(event) => updateStudent(student.id, { observations: event.target.value })}
+                        />
+                      </div>
+                    </div>
+                    <div className="chips" style={{ marginTop: 8 }}>
+                      <button
+                        className="btn btn-ghost"
+                        type="button"
+                        onClick={() => removeStudent(student.id)}
+                        disabled={students.length === 1}
+                      >
+                        Remover aluno
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="chips" style={{ marginTop: 12 }}>
+                <button className="btn" type="button" onClick={addStudent}>
+                  Adicionar outro aluno
+                </button>
+              </div>
+            </div>
             <div className="chips" style={{ gridColumn: '1 / -1' }}>
               <button className="btn btn-primary" type="submit" disabled={loading || !form.terms}>
                 {loading ? 'Criando conta...' : 'Criar conta'}
